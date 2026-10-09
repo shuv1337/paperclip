@@ -20,7 +20,6 @@ import {
   adapterExecutionTargetDuplexObservabilityRecorder,
   adapterExecutionTargetEnablesSandboxDuplexBridge,
   readAdapterExecutionTarget,
-  resolveAdapterExecutionTargetTimeoutSec,
   resolveAdapterExecutionTargetCommandForLogs,
   runAdapterExecutionTargetProcess,
   startAdapterExecutionTargetPaperclipBridge,
@@ -67,7 +66,10 @@ import {
   claudeModelReceipts,
   parseClaudeStreamJson, createClaudeStreamParser,
   describeClaudeFailure,
+  detectClaudeExpiredOAuth,
   detectClaudeLoginRequired,
+  resolveClaudeRunTimeoutSec,
+  takeClaudeTimeoutDefaultNotice,
   extractClaudeRetryNotBefore,
   isClaudeMaxTurnsResult,
   isClaudeProviderQuotaError,
@@ -316,10 +318,15 @@ async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<Cl
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
-  const timeoutSec = resolveAdapterExecutionTargetTimeoutSec(
+  const timeoutResolution = resolveClaudeRunTimeoutSec(
     executionTarget,
     asNumber(config.timeoutSec, 0),
   );
+  const timeoutSec = timeoutResolution.timeoutSec;
+  if (timeoutResolution.appliedDefault) {
+    const notice = takeClaudeTimeoutDefaultNotice();
+    if (notice) await onLog("stderr", `[paperclip] ${notice}\n`);
+  }
   const graceSec = asNumber(config.graceSec, 20);
   await ensureAdapterExecutionTargetRuntimeCommandInstalled({
     runId,
@@ -1012,6 +1019,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       stdout: proc.stdout,
       stderr: proc.stderr,
     });
+    const expiredOAuth = proc.errorCode
+      ? null
+      : detectClaudeExpiredOAuth({
+          parsed,
+          stderr: proc.stderr,
+          // A successful result can quote an auth phrase. Scan stderr and, when
+          // there is no parsed result, the fallback line. Do not feed
+          // describeClaudeFailure here: it prefixes successful result text.
+          errorMessage: parsed ? "" : parseFallbackErrorMessage(proc),
+        });
+    const authRequired = loginMeta.requiresLogin || expiredOAuth !== null;
     const errorMeta =
       loginMeta.loginUrl != null
         ? {
@@ -1043,7 +1061,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (!parsed) {
       const fallbackErrorMessage = parseFallbackErrorMessage(proc);
       const providerQuota =
-        !loginMeta.requiresLogin &&
+        !authRequired &&
         (proc.exitCode ?? 0) !== 0 &&
         isClaudeProviderQuotaError({
           parsed: null,
@@ -1052,7 +1070,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           errorMessage: fallbackErrorMessage,
         });
       const transientUpstream =
-        !loginMeta.requiresLogin &&
+        !authRequired &&
         !providerQuota &&
         (proc.exitCode ?? 0) !== 0 &&
         isClaudeTransientUpstreamError({
@@ -1075,7 +1093,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         // surfaces the typed `duplex_channel_lost` code before any provider
         // classification, so the CLI lane and the ACP lane report it alike.
         ? proc.errorCode
-        : loginMeta.requiresLogin
+        : authRequired
         ? "claude_auth_required"
         : isClaudeModelNotFoundError({
           parsed: null,
@@ -1103,7 +1121,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         usageByModel: claudeModelReceipts(parsedStream.resultJson?.modelUsage),
         billingType,
         costUsd: parsedStream.costUsd,
-        errorMessage: fallbackErrorMessage,
+        errorMessage: expiredOAuth?.errorMessage ?? fallbackErrorMessage,
+        summary: expiredOAuth?.errorMessage,
         errorCode,
         errorFamily,
         retryNotBefore: transientRetryNotBefore ? transientRetryNotBefore.toISOString() : null,
@@ -1111,6 +1130,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         resultJson: {
           stdout: proc.stdout,
           stderr: proc.stderr,
+          ...(expiredOAuth ? { summary: expiredOAuth.errorMessage } : {}),
           ...(errorFamily ? { errorFamily } : {}),
           ...(transientRetryNotBefore
             ? { retryNotBefore: transientRetryNotBefore.toISOString() }
@@ -1183,12 +1203,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         ...(workspaceRepoRef ? { repoRef: workspaceRepoRef } : {}),
       } as Record<string, unknown>)
       : null;
-    const errorMessage = failed
+    const rawErrorMessage = failed
       ? describeClaudeFailure(parsed) ?? `Claude exited with code ${proc.exitCode ?? -1}`
       : null;
+    const errorMessage = expiredOAuth?.errorMessage ?? rawErrorMessage;
     const providerQuota =
       failed &&
-      !loginMeta.requiresLogin &&
+      !authRequired &&
       !clearSessionForMaxTurns &&
       !poisonedPreviousMessageId &&
       isClaudeProviderQuotaError({
@@ -1199,7 +1220,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       });
     const transientUpstream =
       failed &&
-      !loginMeta.requiresLogin &&
+      !authRequired &&
       !clearSessionForMaxTurns &&
       !poisonedPreviousMessageId &&
       !providerQuota &&
@@ -1222,7 +1243,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       // first. A lost duplex control channel surfaces the typed
       // `duplex_channel_lost` code before any provider classification.
       ? proc.errorCode
-      : loginMeta.requiresLogin
+      : authRequired
       ? "claude_auth_required"
       : failed && isClaudeModelNotFoundError({
         parsed,
@@ -1259,6 +1280,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ...(transientRetryNotBefore ? { transientRetryNotBefore: transientRetryNotBefore.toISOString() } : {}),
       ...(providerQuota && transientRetryNotBefore ? { providerQuotaRetryNotBefore: transientRetryNotBefore.toISOString() } : {}),
       ...(proc.terminalResultCleanup ? { unmanagedBackgroundTask: proc.terminalResultCleanup } : {}),
+      ...(expiredOAuth ? { summary: expiredOAuth.errorMessage } : {}),
     };
 
     return {
@@ -1283,7 +1305,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       billingType,
       costUsd: parsedStream.costUsd,
       resultJson: mergedResultJson,
-      summary: parsedStream.summary || asString(parsed.result, ""),
+      summary: expiredOAuth?.errorMessage || parsedStream.summary || asString(parsed.result, ""),
       clearSession:
         clearSessionForMaxTurns ||
         // Clear-on-error: a poisoned previous_message_id is a deterministic

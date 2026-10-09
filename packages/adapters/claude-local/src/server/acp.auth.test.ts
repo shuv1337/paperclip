@@ -130,6 +130,25 @@ describe("mapClaudeAcpAuthErrorCode", () => {
     expect(mapClaudeAcpAuthErrorCode(engineResult).errorCode).toBe("acpx_runtime_error");
   });
 
+  it("replaces a raw expired OAuth 401 with the re-login message and run summary", () => {
+    const mapped = mapClaudeAcpAuthErrorCode({
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      errorCode: "acpx_turn_failed",
+      errorMessage: "401 OAuth access token has expired",
+      summary: "401 OAuth access token has expired",
+      resultJson: { status: "failed", stopReason: "401 OAuth access token has expired" },
+    });
+
+    expect(mapped.errorCode).toBe("claude_auth_required");
+    expect(mapped.errorMessage).toBe(
+      "Claude login expired on the host - re-login via Paperclip AI connections (Claude) or run `claude login` on the server",
+    );
+    expect(mapped.summary).toBe(mapped.errorMessage);
+    expect(mapped.resultJson).toMatchObject({ summary: mapped.errorMessage });
+  });
+
   it("leaves a null error code unchanged", () => {
     const engineResult: AdapterExecutionResult = {
       exitCode: 0,

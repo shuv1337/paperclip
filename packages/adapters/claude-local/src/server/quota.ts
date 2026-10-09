@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ProviderQuotaResult, QuotaWindow } from "@paperclipai/adapter-utils";
+import { CLAUDE_LOGIN_EXPIRED_MESSAGE } from "./parse.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -279,7 +280,17 @@ export async function fetchClaudeQuota(token: string, signal?: AbortSignal): Pro
       "anthropic-beta": "oauth-2025-04-20",
     },
   });
-  if (!resp.ok) throw new Error(`anthropic usage api returned ${resp.status}`);
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    if (
+      resp.status === 401
+      || /authentication_error/i.test(body)
+      || /oauth\s+access\s+token\s+has\s+expired/i.test(body)
+    ) {
+      throw new Error(CLAUDE_LOGIN_EXPIRED_MESSAGE);
+    }
+    throw new Error(`anthropic usage api returned ${resp.status}`);
+  }
   const body = (await resp.json()) as AnthropicUsageResponse;
   const windows: QuotaWindow[] = [];
 
@@ -366,11 +377,14 @@ function usageOutputLooksComplete(text: string): boolean {
 function extractUsageError(text: string): string | null {
   const lower = text.toLowerCase();
   const compact = lower.replace(/\s+/g, "");
-  if (lower.includes("token_expired") || lower.includes("token has expired")) {
-    return "Claude CLI token expired. Run `claude login` to refresh.";
-  }
-  if (lower.includes("authentication_error")) {
-    return "Claude CLI authentication error. Run `claude login`.";
+  if (
+    lower.includes("token_expired")
+    || lower.includes("token has expired")
+    || lower.includes("oauth access token has expired")
+    || lower.includes("authentication_error")
+    || (/\b401\b/.test(lower) && (lower.includes("oauth") || lower.includes("authentication")))
+  ) {
+    return CLAUDE_LOGIN_EXPIRED_MESSAGE;
   }
   if (lower.includes("rate_limit_error") || lower.includes("rate limited") || compact.includes("ratelimited")) {
     return "Claude CLI usage endpoint is rate limited right now. Please try again later.";
