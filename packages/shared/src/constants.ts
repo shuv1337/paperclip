@@ -74,6 +74,9 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   general: "General",
 };
 
+/** Agent join approval returns 409 with this code when the company has no CEO. */
+export const NO_ACTIVE_CEO_JOIN_APPROVAL_CODE = "no_active_ceo" as const;
+
 export const AGENT_DEFAULT_MAX_CONCURRENT_RUNS = 20;
 export const WORKSPACE_BRANCH_ROUTINE_VARIABLE = "workspaceBranch";
 

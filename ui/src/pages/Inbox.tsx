@@ -5,6 +5,7 @@ import { deriveOriginatingActor, INBOX_MINE_ISSUE_STATUS_FILTER, isHeartbeatRunV
 import { usePublishSharedQueryData, useSharedPollingQuery } from "@/hooks/useSharedPolling";
 import { approvalsApi } from "../api/approvals";
 import { accessApi } from "../api/access";
+import { ActionErrorLine, actionErrorFromUnknown, type ActionErrorState } from "../components/ActionErrorLine";
 import { authApi } from "../api/auth";
 import { ApiError } from "../api/client";
 import { dashboardApi } from "../api/dashboard";
@@ -827,7 +828,7 @@ function StreamlinedInbox({
   const { pushToast } = useToastActions();
   const location = useLocation();
   const queryClient = useQueryClient();
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ActionErrorState>(null);
   const { data: experimentalSettings } = useQuery({
     queryKey: queryKeys.instance.experimentalSettings,
     queryFn: () => instanceSettingsApi.getExperimental(),
@@ -1767,7 +1768,7 @@ function StreamlinedInbox({
       navigate(`/approvals/${id}?resolved=approved`);
     },
     onError: (err) => {
-      setActionError(err instanceof Error ? err.message : "Failed to approve");
+      setActionError(actionErrorFromUnknown(err, "Failed to approve"));
     },
   });
 
@@ -1778,7 +1779,7 @@ function StreamlinedInbox({
       queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId!) });
     },
     onError: (err) => {
-      setActionError(err instanceof Error ? err.message : "Failed to reject");
+      setActionError(actionErrorFromUnknown(err, "Failed to reject"));
     },
   });
 
@@ -1793,7 +1794,7 @@ function StreamlinedInbox({
       queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
     },
     onError: (err) => {
-      setActionError(err instanceof Error ? err.message : "Failed to approve join request");
+      setActionError(actionErrorFromUnknown(err, "Failed to approve join request"));
     },
   });
 
@@ -1806,7 +1807,7 @@ function StreamlinedInbox({
       queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(selectedCompanyId!) });
     },
     onError: (err) => {
-      setActionError(err instanceof Error ? err.message : "Failed to reject join request");
+      setActionError(actionErrorFromUnknown(err, "Failed to reject join request"));
     },
   });
 
@@ -1907,7 +1908,7 @@ function StreamlinedInbox({
       return { companyId: selectedCompanyId, previousData };
     },
     onError: (err, id, context) => {
-      setActionError(err instanceof Error ? err.message : "Failed to archive task");
+      setActionError(actionErrorFromUnknown(err, "Failed to archive task"));
       if (context?.companyId) clearLocalInboxArchive(context.companyId, id);
       setArchivingIssueIds((prev) => {
         const next = new Set(prev);
@@ -1948,7 +1949,7 @@ function StreamlinedInbox({
       return { companyId: selectedCompanyId };
     },
     onError: (err, id, context) => {
-      setActionError(err instanceof Error ? err.message : "Failed to undo inbox archive");
+      setActionError(actionErrorFromUnknown(err, "Failed to undo inbox archive"));
       if (context?.companyId) {
         beginLocalInboxArchive(context.companyId, id);
         boundLocalInboxArchive(context.companyId, id);
@@ -2707,7 +2708,7 @@ function StreamlinedInbox({
       />
 
       {approvalsError && <p className="text-sm text-destructive">{approvalsError.message}</p>}
-      {actionError && <p className="text-sm text-destructive">{actionError}</p>}
+      <ActionErrorLine error={actionError} />
 
       {tab === "blocked" ? (
         <div className="-mx-2 sm:mx-0">

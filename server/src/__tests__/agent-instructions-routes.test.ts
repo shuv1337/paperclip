@@ -843,4 +843,39 @@ describe("agent instructions bundle routes", () => {
     expect(res.body.adapterConfig.instructionsEntryFile).toBeUndefined();
     expect(res.body.adapterConfig.instructionsFilePath).toBeUndefined();
   });
+
+  it("promotes an agent to ceo through PATCH /api/agents/:id", async () => {
+    mockAgentService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...makeAgent(),
+      ...patch,
+    }));
+
+    const res = await requestApp(await createApp(), (baseUrl) => request(baseUrl)
+      .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+      .send({ role: "ceo" }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.role).toBe("ceo");
+    expect(mockAgentService.update).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      expect.objectContaining({ role: "ceo" }),
+      expect.any(Object),
+    );
+  });
+
+  it("keeps role changes behind the existing agent update permission check", async () => {
+    mockAccessService.decide.mockResolvedValue({
+      allowed: false,
+      reason: "deny_missing_grant",
+      explanation: "Missing permission to update this agent",
+    });
+
+    const res = await requestApp(await createApp(), (baseUrl) => request(baseUrl)
+      .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+      .send({ role: "ceo" }));
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toContain("Missing permission");
+    expect(mockAgentService.update).not.toHaveBeenCalled();
+  });
 });

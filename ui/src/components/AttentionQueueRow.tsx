@@ -20,6 +20,7 @@ import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
 import { describeAttentionResolverAudience, type InteractionAudienceDescription } from "../lib/interaction-audience";
 import { interactionResolutionErrorMessage } from "../lib/interaction-resolution-error";
+import { describeNoActiveCeoError, joinApprovalErrorToast } from "../lib/join-approval-error";
 import {
   attentionDetailImages,
   attentionDetailLine,
@@ -521,6 +522,10 @@ function CompactDecisionActions({
       });
     },
     onError: (error, action) => {
+      if (item.sourceKind === "join_request" && describeNoActiveCeoError(error)) {
+        pushToast(joinApprovalErrorToast(error, `Could not ${decisionLabel(action)}`));
+        return;
+      }
       // A policy denial is permanent, so it keeps the server's reason and names
       // the real responder instead of asking for a retry that will fail again.
       pushToast({
@@ -879,6 +884,7 @@ function ApprovalResolver({ item, companyId, toggle }: { item: AttentionItem; co
 
 function JoinRequestResolver({ item, companyId, toggle }: { item: AttentionItem; companyId: string; toggle: ReactNode }) {
   const queryClient = useQueryClient();
+  const { pushToast } = useToastActions();
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: queryKeys.attention(companyId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.access.joinRequests(companyId) });
@@ -886,6 +892,9 @@ function JoinRequestResolver({ item, companyId, toggle }: { item: AttentionItem;
   const approve = useMutation({
     mutationFn: () => accessApi.approveJoinRequest(companyId, item.subject.id),
     onSuccess: invalidate,
+    onError: (error) => {
+      pushToast(joinApprovalErrorToast(error, "Failed to approve join request"));
+    },
   });
   const reject = useMutation({
     mutationFn: () => accessApi.rejectJoinRequest(companyId, item.subject.id),
