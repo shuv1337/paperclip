@@ -103,13 +103,26 @@ describeEmbeddedPostgres("http adapter async runs", () => {
   }, 60_000);
 
   afterEach(async () => {
-    resetAsyncHttpRunsForTests();
-    await heartbeat.drainActiveRunExecutions();
+    // A comment can queue a follow-up wake. Close the webhook and keep
+    // resolving async sessions so that wake cannot sit in timeoutSec.
     await Promise.all(webhooks.splice(0).map((hook) => hook.close()));
+    let stop = false;
+    const releaseWaitingRuns = (async () => {
+      while (!stop) {
+        resetAsyncHttpRunsForTests();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    })();
+    try {
+      await heartbeat.drainActiveRunExecutions();
+    } finally {
+      stop = true;
+      await releaseWaitingRuns;
+    }
     if (previousAllowlist === undefined) delete process.env[PRIVATE_ALLOWLIST_ENV];
     else process.env[PRIVATE_ALLOWLIST_ENV] = previousAllowlist;
     await db.execute(sql.raw(`TRUNCATE TABLE "companies" CASCADE`));
-  });
+  }, 20_000);
 
   afterAll(async () => {
     await heartbeat?.drainActiveRunExecutions();
