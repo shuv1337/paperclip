@@ -181,7 +181,7 @@ describe("http adapter execute", () => {
     const gate = await staysPending(pending);
     expect(gate.settled).toBe(false);
 
-    const callback = payload?.paperclipCallback as Record<string, unknown>;
+    const callback = (payload as Record<string, unknown> | null)?.paperclipCallback as Record<string, unknown>;
     expect(callback).toMatchObject({
       runId: "run-202",
       url: "https://paperclip.test/api/runs/run-202/complete",
