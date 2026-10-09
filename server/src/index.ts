@@ -907,6 +907,9 @@ async function startServerWithDatabaseTeardown(
     cloudWarmStandby: isWarmStandby,
     uiMode,
     serverPort: listenPort,
+    // This process binds node:http. Tailscale Serve and other proxies terminate
+    // TLS on auth.publicBaseUrl; they do not change the listen scheme.
+    listenScheme: "http",
     storageService,
     feedbackExportService: feedback,
     databaseBackupService: {
