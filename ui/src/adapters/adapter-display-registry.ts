@@ -155,9 +155,8 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
   },
   http: {
     label: "HTTP",
-    description: "Internal HTTP adapter",
+    description: "Call an external HTTP endpoint",
     icon: Cpu,
-    comingSoon: true,
   },
 };
 

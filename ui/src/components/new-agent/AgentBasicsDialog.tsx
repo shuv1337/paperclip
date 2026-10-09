@@ -76,7 +76,7 @@ export function AgentBasicsDialog({
         cloud,
         nativeRunnerEnabled: experimental.data?.enableNativeRunner === true,
       }) &&
-      !["process", "http"].includes(adapter.type) &&
+      adapter.type !== "process" &&
       !getAdapterDisplay(adapter.type).comingSoon,
   );
   const validAdapter = choices.some((adapter) => adapter.type === adapterType);
