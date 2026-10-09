@@ -1783,6 +1783,50 @@ credentials, query strings, fragments, and wildcards are ignored. Matching is
 by exact normalized origin, so allowing one port does not allow another.
 Link-local destinations remain denied even when explicitly listed.
 
+## HTTP Adapter Async Runs
+
+A normal HTTP adapter run closes as soon as the webhook returns a 2xx status.
+Async agents that write back later need the run to stay `running`.
+
+Keep the run open in any of these ways:
+
+- Set `adapterConfig.responseMode` to `async`. Any 2xx then waits.
+- Return HTTP 202.
+- Return a JSON body `{"async":true}`.
+
+`responseMode: "sync"` restores the previous behavior and closes on every 2xx.
+The default is `auto`, which honors 202 and `{"async":true}` only.
+
+`timeoutSec` still bounds the webhook request. In async mode it is also the
+deadline for the completion callback. When that deadline passes, the run fails
+as `timed_out`. `0` waits until the callback or cancellation.
+
+When the run may stay open, the webhook JSON includes `paperclipCallback`:
+
+- `runId` — heartbeat run id
+- `url` — `{origin}/api/runs/{runId}/complete`
+- `token` — run-scoped bearer token
+- `method` — `POST`
+- `auth` — `bearer`
+- `timeoutSec` — present when a deadline is configured
+
+The origin comes from `adapterConfig.callbackBaseUrl` or `PAPERCLIP_API_URL`.
+
+Complete the run with:
+
+```http
+POST /api/runs/{runId}/complete
+Authorization: Bearer <paperclipCallback.token>
+Content-Type: application/json
+
+{ "status": "succeeded", "summary": "optional text" }
+```
+
+`status` is `succeeded` or `failed`. The owning agent's API key can call the
+same endpoint. While the run is open, that API key can also comment on and
+update documents for the issue assigned to the agent without
+`X-Paperclip-Run-Id`.
+
 ## Company Deletion Toggle
 
 Company deletion is intended as a dev/debug capability and can be disabled at runtime:

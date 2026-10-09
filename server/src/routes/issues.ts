@@ -3678,15 +3678,39 @@ export function issueRoutes(
     return resolveActorSourceTrustForIssue({ db, issue, actor });
   }
 
+  function assigneeAgentKeyMayWriteWithoutRun(
+    req: Request,
+    issue: { assigneeAgentId?: string | null },
+  ) {
+    // Async HTTP agents write back with their long-lived API key and no run
+    // header. That key may update the issue assigned to the same agent. A
+    // missing run still blocks writes to anyone else's issue.
+    return (
+      req.actor.type === "agent" &&
+      req.actor.source === "agent_key" &&
+      !req.actor.runId?.trim() &&
+      Boolean(req.actor.agentId) &&
+      Boolean(issue.assigneeAgentId) &&
+      issue.assigneeAgentId === req.actor.agentId
+    );
+  }
+
   async function assertCrossIssueInfluenceWithinRunCap(
     req: Request,
     res: Response,
-    issue: { id: string; identifier?: string | null; companyId: string },
+    issue: {
+      id: string;
+      identifier?: string | null;
+      companyId: string;
+      assigneeAgentId?: string | null;
+    },
     kind: CrossIssueInfluenceKind,
   ) {
     if (req.actor.type !== "agent") return true;
-    if (!req.actor.agentId || !req.actor.runId)
+    if (!req.actor.agentId || !req.actor.runId) {
+      if (assigneeAgentKeyMayWriteWithoutRun(req, issue)) return true;
       throw crossIssueInfluenceRunContextError();
+    }
 
     // The counter transaction locks and validates the persisted run before it
     // derives the source issue. Never trust the API-key run header by itself.
@@ -5626,6 +5650,7 @@ export function issueRoutes(
     if (issue.status !== "in_progress") {
       return true;
     }
+    if (assigneeAgentKeyMayWriteWithoutRun(req, issue)) return true;
     const runId = requireAgentRunId(req, res);
     if (!runId) return false;
     const ownership = await svc.assertCheckoutOwner(
