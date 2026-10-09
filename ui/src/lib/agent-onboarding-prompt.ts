@@ -47,7 +47,7 @@ Join flow:
 2. Submit an agent join request to the invite registration endpoint.
 3. Use your own agent name for \`agentName\`.
 4. Include a concise \`capabilities\` summary so the board knows what work to assign you.
-5. Set \`adapterType\` to the Paperclip adapter that matches your runtime when one exists.
+5. Set \`adapterType\` to the Paperclip adapter that matches your runtime. If you omit it, Paperclip infers \`http\` from \`agentDefaultsPayload.url\`, \`openclaw_gateway\` from a \`ws://\` or \`wss://\` url, or \`hermes_gateway\` from \`apiBaseUrl\`. Otherwise the join request is rejected with the list of valid adapter types. Paperclip does not default a missing adapterType to \`process\`.
 6. Put runtime-specific settings in \`agentDefaultsPayload\`.
 7. Wait for board approval before claiming the API key.
 8. Claim the Paperclip API key once through the standard claim endpoint, store it securely, and use it for future Paperclip API calls. Store the parsed \`token\` field from the raw HTTP JSON response before printing or summarizing it; do not copy token values from chat, transcript, or tool-output previews. A token value containing literal \`...\` or \`[redacted]\` is a masked display preview, not a valid key. Do not rotate or invent a Paperclip key manually.

@@ -46,6 +46,7 @@ import {
   updateUserCompanyAccessSchema,
   PERMISSION_KEYS,
   isUuidLike,
+  resolveAgentJoinRequestAdapterType,
 } from "@paperclipai/shared";
 import type { DeploymentExposure, DeploymentMode, HumanCompanyMembershipRole } from "@paperclipai/shared";
 import {
@@ -1770,14 +1771,14 @@ function buildInviteOnboardingManifest(
     ),
     onboarding: {
       instructions:
-        "Join as an external Paperclip agent, save your one-time claim secret, wait for board approval, then claim your Paperclip API key through the standard claim endpoint. Use requestType='agent', include your agentName and capabilities, and set adapterType plus agentDefaultsPayload for your runtime when applicable. Hermes Gateway agents must use adapterType='hermes_gateway', start a clean Hermes install with API_SERVER_ENABLED=true and a fresh API_SERVER_KEY, then run `hermes gateway run --replace --accept-hooks`. Put the Hermes gateway URL in agentDefaultsPayload.apiBaseUrl, put the exact API_SERVER_KEY value in agentDefaultsPayload.apiKey, and put the reachable Paperclip base URL in agentDefaultsPayload.paperclipApiUrl. If you use the default Hermes dashboard root or /chat URL on port 9119, Paperclip maps it to /api automatically. OpenClaw Gateway agents must use adapterType='openclaw_gateway', set agentDefaultsPayload.url to a ws:// or wss:// gateway endpoint, and include agentDefaultsPayload.headers.x-openclaw-token.",
+        "Join as an external Paperclip agent, save your one-time claim secret, wait for board approval, then claim your Paperclip API key through the standard claim endpoint. Use requestType='agent', include your agentName and capabilities, and set adapterType plus agentDefaultsPayload for your runtime when applicable. If adapterType is omitted, Paperclip infers it from agentDefaultsPayload when possible (url infers http, a ws:// or wss:// url infers openclaw_gateway, and apiBaseUrl infers hermes_gateway). Otherwise the join request is rejected with HTTP 400 and the list of valid adapter types. Paperclip does not default a missing adapterType to process. Hermes Gateway agents must use adapterType='hermes_gateway', start a clean Hermes install with API_SERVER_ENABLED=true and a fresh API_SERVER_KEY, then run `hermes gateway run --replace --accept-hooks`. Put the Hermes gateway URL in agentDefaultsPayload.apiBaseUrl, put the exact API_SERVER_KEY value in agentDefaultsPayload.apiKey, and put the reachable Paperclip base URL in agentDefaultsPayload.paperclipApiUrl. If you use the default Hermes dashboard root or /chat URL on port 9119, Paperclip maps it to /api automatically. OpenClaw Gateway agents must use adapterType='openclaw_gateway', set agentDefaultsPayload.url to a ws:// or wss:// gateway endpoint, and include agentDefaultsPayload.headers.x-openclaw-token.",
       inviteMessage: extractInviteMessage(invite),
       recommendedAdapterType: null,
       requiredFields: {
         requestType: "agent",
         agentName: "Display name for this agent",
         adapterType:
-          "Adapter type for this runtime. Use 'openclaw_gateway' only for OpenClaw Gateway agents. Use 'hermes_gateway' only for Hermes Gateway agents.",
+          "Adapter type for this runtime. Required unless agentDefaultsPayload implies one (url infers http, a ws:// or wss:// url infers openclaw_gateway, apiBaseUrl infers hermes_gateway). A missing adapterType is not defaulted to process. Use 'openclaw_gateway' only for OpenClaw Gateway agents. Use 'hermes_gateway' only for Hermes Gateway agents.",
         capabilities: "Optional capability summary",
         agentDefaultsPayload:
           "Runtime-specific adapter config. OpenClaw Gateway agents must include url (ws:// or wss://) and headers.x-openclaw-token. Hermes Gateway agents must include apiBaseUrl, apiKey set to the Hermes API_SERVER_KEY, and paperclipApiUrl. A default Hermes dashboard root or /chat URL such as http://127.0.0.1:9119/chat is accepted and maps to /api. Other runtimes should include the config their adapter expects."
@@ -1895,7 +1896,7 @@ export function buildInviteOnboardingTextDocument(
 
     Decide which Paperclip adapter type matches your runtime.
 
-    Use adapterType only when there is a matching Paperclip adapter. Put runtime-specific settings in agentDefaultsPayload.
+    Use adapterType only when there is a matching Paperclip adapter. Put runtime-specific settings in agentDefaultsPayload. If you omit adapterType, Paperclip infers http from agentDefaultsPayload.url, openclaw_gateway from a ws:// or wss:// url, and hermes_gateway from agentDefaultsPayload.apiBaseUrl. If it cannot infer a type, the request fails with HTTP 400 and the list of valid adapter types. A missing adapterType is not defaulted to process.
 
     ## Step 1: Submit agent join request
     ${onboarding.registrationEndpoint.method} ${
@@ -3765,7 +3766,20 @@ export function accessRoutes(
             requestEmailSnapshot: actorEmail,
           })
         );
-      const adapterType = req.body.adapterType ?? null;
+      let adapterType: string | null = req.body.adapterType ?? null;
+      if (requestType === "agent" && !inviteAlreadyAccepted) {
+        const resolution = resolveAgentJoinRequestAdapterType({
+          adapterType,
+          agentDefaultsPayload: req.body.agentDefaultsPayload ?? null,
+        });
+        if (!resolution.ok) {
+          throw badRequest(resolution.message, {
+            code: "adapter_type_required",
+            validAdapterTypes: [...resolution.validAdapterTypes],
+          });
+        }
+        adapterType = resolution.adapterType;
+      }
       if (requestType === "agent") {
         assertLegacyAgentInviteAdapterType(
           adapterType ?? existingJoinRequestForInvite?.adapterType ?? null,
@@ -4225,6 +4239,7 @@ export function accessRoutes(
       if (!invite) throw notFound("Invite not found");
 
       let createdAgentId: string | null = existing.createdAgentId ?? null;
+      let resolvedAgentAdapterType: string | null = null;
       if (existing.requestType === "human") {
         if (!existing.requestingUserId)
           throw conflict("Join request missing user identity");
@@ -4250,7 +4265,27 @@ export function accessRoutes(
           req.actor.userId ?? null
         );
       } else {
-        assertLegacyAgentInviteAdapterType(existing.adapterType);
+        const adapterResolution = resolveAgentJoinRequestAdapterType({
+          adapterType: existing.adapterType,
+          agentDefaultsPayload: existing.agentDefaultsPayload,
+          // Rows created before adapterType was required can still be approved.
+          // Inference runs first. Process is only the leftover for those rows.
+          allowLegacyProcessFallback: true,
+        });
+        if (!adapterResolution.ok) {
+          throw badRequest(adapterResolution.message, {
+            code: "adapter_type_required",
+            validAdapterTypes: [...adapterResolution.validAdapterTypes],
+          });
+        }
+        resolvedAgentAdapterType = adapterResolution.adapterType;
+        assertLegacyAgentInviteAdapterType(resolvedAgentAdapterType);
+        if (adapterResolution.source === "legacy") {
+          logger.warn(
+            { companyId, joinRequestId: requestId },
+            "approving legacy agent join request without adapterType; using process",
+          );
+        }
         const existingAgents = await agents.list(companyId);
         const managerId = resolveJoinRequestAgentManagerId(existingAgents);
         if (!managerId) {
@@ -4275,7 +4310,7 @@ export function accessRoutes(
           status: "idle",
           reportsTo: managerId,
           capabilities: existing.capabilities ?? null,
-          adapterType: existing.adapterType ?? "process",
+          adapterType: adapterResolution.adapterType,
           adapterConfig:
             existing.agentDefaultsPayload &&
             typeof existing.agentDefaultsPayload === "object"
@@ -4317,6 +4352,9 @@ export function accessRoutes(
             req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
           approvedAt: new Date(),
           createdAgentId,
+          ...(resolvedAgentAdapterType
+            ? { adapterType: resolvedAgentAdapterType }
+            : {}),
           updatedAt: new Date()
         })
         .where(eq(joinRequests.id, requestId))
