@@ -481,6 +481,11 @@ export async function createApp(
     cloudWarmStandby?: CloudWarmStandby;
     uiMode: UiMode;
     serverPort: number;
+    /**
+     * Scheme of the socket this process binds. Paperclip serves plain HTTP.
+     * Pass `https` only when this process terminates TLS itself.
+     */
+    listenScheme?: "http" | "https";
     storageService: StorageService;
     feedbackExportService?: {
       flushPendingFeedbackTraces(input?: {
@@ -999,6 +1004,8 @@ export async function createApp(
       bindHost: opts.bindHost,
       allowedHostnames: opts.allowedHostnames,
       authPublicBaseUrl: opts.authPublicBaseUrl,
+      listenPort: opts.serverPort,
+      listenScheme: opts.listenScheme ?? "http",
     }),
   );
   let publicMcpEvents: PublicMcpEvents | null = null;

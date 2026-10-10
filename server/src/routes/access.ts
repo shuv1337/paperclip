@@ -10,6 +10,7 @@ import type { IncomingMessage, RequestOptions as HttpRequestOptions } from "node
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
+import type { NetworkInterfaceInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Router } from "express";
@@ -1678,10 +1679,69 @@ function buildOnboardingDiscoveryDiagnostics(input: {
   return diagnostics;
 }
 
-function buildOnboardingConnectionCandidates(input: {
+function isUnspecifiedBindHost(hostname: string): boolean {
+  const value = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return value === "0.0.0.0" || value === "::" || value === "0:0:0:0:0:0:0:0";
+}
+
+/**
+ * The Paperclip process serves plain HTTP unless it terminates TLS itself.
+ * Anything else, including a missing value, stays on http.
+ */
+function resolveOnboardingListenScheme(value: string | undefined): "http" | "https" {
+  const normalized = value?.trim().toLowerCase().replace(/:$/, "");
+  return normalized === "https" ? "https" : "http";
+}
+
+function resolveOnboardingListenPort(
+  explicit: number | undefined,
+  base: URL | null,
+  scheme: "http" | "https",
+): number {
+  if (typeof explicit === "number" && Number.isInteger(explicit) && explicit > 0 && explicit <= 65535) {
+    return explicit;
+  }
+  if (base?.port) {
+    const parsed = Number(base.port);
+    if (Number.isInteger(parsed) && parsed > 0 && parsed <= 65535) return parsed;
+  }
+  return scheme === "https" ? 443 : 80;
+}
+
+function formatListenOrigin(scheme: "http" | "https", host: string, port: number): string {
+  const formattedHost =
+    host.includes(":") && !host.startsWith("[") && !host.endsWith("]")
+      ? `[${host}]`
+      : host;
+  return `${scheme}://${formattedHost}:${port}`;
+}
+
+function pushOnboardingCandidate(candidates: string[], seen: Set<string>, rawUrl: string | null | undefined) {
+  const trimmed = rawUrl?.trim();
+  if (!trimmed) return;
+  try {
+    const origin = new URL(trimmed).origin;
+    if (seen.has(origin)) return;
+    seen.add(origin);
+    candidates.push(origin);
+  } catch {
+    // Ignore malformed candidates.
+  }
+}
+
+export function buildOnboardingConnectionCandidates(input: {
   apiBaseUrl: string;
   bindHost: string;
   allowedHostnames: string[];
+  /** Process listen port (`config.server.port` / `PORT`, after bind). */
+  listenPort?: number;
+  /**
+   * Process listen scheme. `http` unless this process terminates TLS.
+   * A proxy in front of the process (Tailscale Serve, for example) does not
+   * change this value; that proxy URL stays the first candidate as-is.
+   */
+  listenScheme?: "http" | "https";
+  networkInterfacesMap?: NodeJS.Dict<NetworkInterfaceInfo[]>;
 }): string[] {
   let base: URL | null = null;
   try {
@@ -1692,35 +1752,43 @@ function buildOnboardingConnectionCandidates(input: {
     base = null;
   }
 
-  const protocol = base?.protocol ?? "http:";
-  const port = base?.port ? `:${base.port}` : "";
-  const candidates = new Set<string>();
+  const listenScheme = resolveOnboardingListenScheme(input.listenScheme);
+  const listenPort = resolveOnboardingListenPort(input.listenPort, base, listenScheme);
+  const candidates: string[] = [];
+  const seen = new Set<string>();
 
+  // Candidate 1 is the public origin exactly as configured. Its scheme and
+  // port belong to the proxy or public URL, not to the process listen socket.
   if (base) {
-    candidates.add(base.origin);
+    pushOnboardingCandidate(candidates, seen, base.origin);
   }
 
-  const bindHost = normalizeHostname(input.bindHost);
-  if (bindHost && !isLoopbackHost(bindHost)) {
-    candidates.add(`${protocol}//${bindHost}${port}`);
+  for (const host of collectReachableInterfaceHosts({
+    networkInterfacesMap: input.networkInterfacesMap,
+  })) {
+    pushOnboardingCandidate(candidates, seen, formatListenOrigin(listenScheme, host, listenPort));
   }
 
   for (const rawHost of input.allowedHostnames) {
     const host = normalizeHostname(rawHost);
     if (!host) continue;
-    candidates.add(`${protocol}//${host}${port}`);
+    pushOnboardingCandidate(candidates, seen, formatListenOrigin(listenScheme, host, listenPort));
+  }
+
+  const bindHost = normalizeHostname(input.bindHost);
+  if (bindHost && !isLoopbackHost(bindHost) && !isUnspecifiedBindHost(bindHost)) {
+    pushOnboardingCandidate(candidates, seen, formatListenOrigin(listenScheme, bindHost, listenPort));
   }
 
   if (base && isLoopbackHost(base.hostname)) {
-    candidates.add(`${protocol}//host.docker.internal${port}`);
+    pushOnboardingCandidate(
+      candidates,
+      seen,
+      formatListenOrigin(listenScheme, "host.docker.internal", listenPort),
+    );
   }
 
-  for (const host of collectReachableInterfaceHosts()) {
-    const formattedHost = host.includes(":") && !host.startsWith("[") && !host.endsWith("]") ? `[${host}]` : host;
-    candidates.add(`${protocol}//${formattedHost}${port}`);
-  }
-
-  return Array.from(candidates);
+  return candidates;
 }
 
 function buildInviteOnboardingManifest(
@@ -1734,6 +1802,8 @@ function buildInviteOnboardingManifest(
     bindHost: string;
     allowedHostnames: string[];
     authPublicBaseUrl?: string;
+    listenPort?: number;
+    listenScheme?: "http" | "https";
   }
 ) {
   const baseUrl = resolveBaseUrl(req, opts.authPublicBaseUrl);
@@ -1757,7 +1827,9 @@ function buildInviteOnboardingManifest(
   const connectionCandidates = buildOnboardingConnectionCandidates({
     apiBaseUrl: baseUrl,
     bindHost: opts.bindHost,
-    allowedHostnames: opts.allowedHostnames
+    allowedHostnames: opts.allowedHostnames,
+    listenPort: opts.listenPort,
+    listenScheme: opts.listenScheme,
   });
 
   return {
@@ -1834,6 +1906,8 @@ export function buildInviteOnboardingTextDocument(
     bindHost: string;
     allowedHostnames: string[];
     authPublicBaseUrl?: string;
+    listenPort?: number;
+    listenScheme?: "http" | "https";
   }
 ) {
   const manifest = buildInviteOnboardingManifest(req, token, invite, opts);
@@ -2634,6 +2708,8 @@ export function accessRoutes(
     inviteResolutionNetwork?: Partial<InviteResolutionNetwork>;
     inviteRateLimiter?: InviteRateLimiter;
     authPublicBaseUrl?: string;
+    listenPort?: number;
+    listenScheme?: "http" | "https";
   }
 ) {
   const router = Router();
