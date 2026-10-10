@@ -1,11 +1,28 @@
 import type { UsageSummary } from "@paperclipai/adapter-utils";
 import {
+  resolveAdapterExecutionTargetTimeout,
+  type AdapterExecutionTarget,
+} from "@paperclipai/adapter-utils/execution-target";
+import {
   asString,
   asNumber,
   asBoolean,
   parseObject,
   parseJson,
 } from "@paperclipai/adapter-utils/server-utils";
+import { DEFAULT_CLAUDE_LOCAL_TIMEOUT_SEC } from "../index.js";
+
+/** Error code the run summary, agent status, and Claude login gate already read. */
+export const CLAUDE_LOGIN_EXPIRED_ERROR_CODE = "claude_auth_required";
+
+/** User-facing copy for an expired or invalid host Claude OAuth login. */
+export const CLAUDE_LOGIN_EXPIRED_MESSAGE =
+  "Claude login expired on the host - re-login via Paperclip AI connections (Claude) or run `claude login` on the server";
+
+const CLAUDE_OAUTH_EXPIRED_PHRASE_RE = /oauth\s+access\s+token\s+has\s+expired/i;
+const CLAUDE_AUTHENTICATION_ERROR_RE = /authentication_error/i;
+const CLAUDE_OAUTH_401_RE =
+  /(?:\b401\b[\s\S]{0,160}(?:authentication_error|authentication_failed|invalid\s+bearer|oauth|access\s+token)|(?:authentication_error|authentication_failed|invalid\s+bearer|oauth\s+access\s+token)[\s\S]{0,160}\b401\b)/i;
 
 // The legacy login-prompt markers. The Claude CLI prints these words when it
 // asks the user to log in. The detector matches them against any probe output
@@ -269,6 +286,98 @@ export function detectClaudeLoginRequired(input: {
     requiresLogin: loginPrompt || tokenFailure,
     loginUrl: extractClaudeLoginUrl([input.stdout, input.stderr].join("\n")),
   };
+}
+
+function claudeOAuthSignal(text: string): boolean {
+  return CLAUDE_OAUTH_EXPIRED_PHRASE_RE.test(text)
+    || CLAUDE_AUTHENTICATION_ERROR_RE.test(text)
+    || CLAUDE_OAUTH_401_RE.test(text);
+}
+
+function nestedClaudeErrorText(value: unknown): string {
+  const obj = parseObject(value);
+  return [asString(obj.type, ""), asString(obj.message, ""), asString(obj.error, "")]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function claudeOAuthTerminalText(parsed: Record<string, unknown>): string {
+  const terminal = parseObject(parsed.terminalSessionFailure);
+  const status = asNumber(parsed.api_error_status, 0) || asNumber(parsed.error_status, 0);
+  return [
+    collectClaudeTerminalText(parsed),
+    nestedClaudeErrorText(parsed.error),
+    asString(parsed.stopReason, ""),
+    asString(terminal.title, ""),
+    asString(terminal.details, ""),
+    status ? String(status) : "",
+  ]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function parsedClaudeRunFailed(parsed: Record<string, unknown>): boolean {
+  if (claudeResultIndicatesAuthFailure(parsed)) return true;
+  if (asString(parsed.status, "").trim().toLowerCase() === "failed") return true;
+  return Object.keys(parseObject(parsed.terminalSessionFailure)).length > 0;
+}
+
+/**
+ * Detect an expired or invalid Claude OAuth login.
+ * Signals are HTTP 401 next to OAuth or bearer language, `authentication_error`,
+ * and the CLI phrase "OAuth access token has expired".
+ * Assistant prose on a successful run does not match. Stderr and the run error
+ * do, because those surfaces are the CLI, not the model.
+ */
+export function detectClaudeExpiredOAuth(input: {
+  parsed?: Record<string, unknown> | null;
+  stderr?: string | null;
+  errorMessage?: string | null;
+}): { errorCode: string; errorMessage: string } | null {
+  const parsed = input.parsed ?? null;
+  const terminal = parsed ? claudeOAuthTerminalText(parsed) : "";
+  const operator = [input.stderr ?? "", input.errorMessage ?? ""].join("\n");
+  const terminalHit = claudeOAuthSignal(terminal);
+  const operatorHit = claudeOAuthSignal(operator);
+  if (!terminalHit && !operatorHit) return null;
+  if (terminalHit && parsed && !parsedClaudeRunFailed(parsed) && !operatorHit) return null;
+  return {
+    errorCode: CLAUDE_LOGIN_EXPIRED_ERROR_CODE,
+    errorMessage: CLAUDE_LOGIN_EXPIRED_MESSAGE,
+  };
+}
+
+let claudeTimeoutDefaultAnnounced = false;
+
+/** One process-wide notice that an unset local timeout used the adapter default. */
+export function takeClaudeTimeoutDefaultNotice(): string | null {
+  if (claudeTimeoutDefaultAnnounced) return null;
+  claudeTimeoutDefaultAnnounced = true;
+  return (
+    `adapterConfig.timeoutSec is unset; using the default of ${DEFAULT_CLAUDE_LOCAL_TIMEOUT_SEC}s. ` +
+    "Set adapterConfig.timeoutSec to override, or set a negative value to disable the adapter timeout."
+  );
+}
+
+export function resetClaudeTimeoutDefaultNoticeForTests(): void {
+  claudeTimeoutDefaultAnnounced = false;
+}
+
+/**
+ * Apply the local Claude default when the shared resolver would leave the run
+ * with no adapter timeout. Sandbox defaults and explicit values stay as resolved.
+ */
+export function resolveClaudeRunTimeoutSec(
+  target: AdapterExecutionTarget | null | undefined,
+  configuredTimeoutSec: number,
+): { timeoutSec: number; appliedDefault: boolean } {
+  const resolved = resolveAdapterExecutionTargetTimeout(target, configuredTimeoutSec);
+  if (resolved.source !== "unlimited") {
+    return { timeoutSec: resolved.timeoutSec, appliedDefault: false };
+  }
+  return { timeoutSec: DEFAULT_CLAUDE_LOCAL_TIMEOUT_SEC, appliedDefault: true };
 }
 
 export function describeClaudeFailure(parsed: Record<string, unknown>): string | null {

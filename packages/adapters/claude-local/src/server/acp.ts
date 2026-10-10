@@ -53,7 +53,15 @@ import {
 } from "./probe-diagnostics.js";
 import { createWorkspaceRestoreTeardown } from "@paperclipai/adapter-utils/workspace-restore-teardown";
 import { buildLocalAdapterTestProbeEnv } from "./probe-env.js";
-import { detectClaudeLoginRequired, extractClaudeRetryNotBefore, isClaudeProviderQuotaError, parseClaudeStreamJson } from "./parse.js";
+import {
+  detectClaudeExpiredOAuth,
+  detectClaudeLoginRequired,
+  extractClaudeRetryNotBefore,
+  isClaudeProviderQuotaError,
+  parseClaudeStreamJson,
+  resolveClaudeRunTimeoutSec,
+  takeClaudeTimeoutDefaultNotice,
+} from "./parse.js";
 import { buildClaudeProbePermissionArgs, claudeSandboxPermissionEnv } from "./permissions.js";
 import { ADAPTER_AUTH_MISSING_CHECK_CODE } from "./auth-check.js";
 import { resolveClaudeModel, SANDBOX_INSTALL_COMMAND } from "../index.js";
@@ -375,9 +383,35 @@ const CLAUDE_AUTH_REQUIRED_ERROR_CODE = "claude_auth_required";
  * prompt. Provider diagnostics stay intact; the generic terminal-access
  * fallback instead explains that Claude needs sign-in.
  */
+const CLAUDE_TRANSPORT_ERROR_CODES = new Set([
+  "duplex_channel_lost",
+  "acpx_timeout",
+  "timeout",
+  "cancelled",
+  "acpx_handshake_timeout",
+  "acpx_handshake_transport_lost",
+]);
+
 export function mapClaudeAcpAuthErrorCode(
   result: AdapterExecutionResult,
 ): AdapterExecutionResult {
+  const resultJson = parseObject(result.resultJson);
+  const runFailed = (result.exitCode ?? 0) !== 0 || Boolean(result.errorCode) || Boolean(result.errorMessage);
+  const expiredOAuth = !runFailed || CLAUDE_TRANSPORT_ERROR_CODES.has(result.errorCode ?? "")
+    ? null
+    : detectClaudeExpiredOAuth({
+        parsed: Object.keys(resultJson).length > 0 ? resultJson : null,
+        errorMessage: [result.errorMessage ?? "", result.summary ?? ""].filter(Boolean).join("\n"),
+      });
+  if (expiredOAuth) {
+    return {
+      ...result,
+      errorCode: expiredOAuth.errorCode,
+      errorMessage: expiredOAuth.errorMessage,
+      summary: expiredOAuth.errorMessage,
+      resultJson: { ...resultJson, summary: expiredOAuth.errorMessage },
+    };
+  }
   if (result.errorCode !== ACPX_AUTH_REQUIRED_ERROR_CODE) return result;
   return {
     ...result,
@@ -401,9 +435,17 @@ export function createClaudeAcpExecutor(options: ClaudeAcpExecutorOptions = {}):
       executionTarget: ctx.executionTarget,
       legacyRemoteExecution: ctx.executionTransport?.remoteExecution,
     });
+    const built = buildClaudeAcpConfig(ctx.config, target?.kind === "remote" ? {} : process.env);
+    const timeoutResolution = resolveClaudeRunTimeoutSec(target, asNumber(built.timeoutSec, 0));
+    if (timeoutResolution.appliedDefault) {
+      const notice = takeClaudeTimeoutDefaultNotice();
+      if (notice) await ctx.onLog("stderr", `[paperclip] ${notice}\n`);
+    }
     const result = await currentExecutor({
       ...ctx,
-      config: buildClaudeAcpConfig(ctx.config, target?.kind === "remote" ? {} : process.env),
+      config: timeoutResolution.appliedDefault
+        ? { ...built, timeoutSec: timeoutResolution.timeoutSec }
+        : built,
     });
     return mapClaudeAcpAuthErrorCode(result);
   };

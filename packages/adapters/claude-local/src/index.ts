@@ -1,5 +1,12 @@
 export const DEFAULT_CLAUDE_LOCAL_MODEL = "claude-opus-5";
 
+/**
+ * Wall-clock timeout used when a local Claude run leaves `timeoutSec` unset.
+ * Stored `0` is the config-form default and does not mean the operator chose
+ * unlimited. A negative `timeoutSec` still disables the adapter timeout.
+ */
+export const DEFAULT_CLAUDE_LOCAL_TIMEOUT_SEC = 3600;
+
 /** Resolve Paperclip's default without replacing an explicit provider model. */
 export function resolveClaudeModel(
   model: unknown,
@@ -88,7 +95,7 @@ ACP fields (only when engine="acp"):
 - warmHandleIdleMs (number, optional, default 0): keep the ACP process warm for this many ms after a successful run
 
 Operational fields:
-- timeoutSec (number, optional): run timeout in seconds
+- timeoutSec (number, optional): run timeout in seconds. Missing or 0 uses ${DEFAULT_CLAUDE_LOCAL_TIMEOUT_SEC} on local runs. A negative value disables the adapter timeout. Sandbox runs keep the sandbox default when this is unset.
 - graceSec (number, optional): SIGTERM grace period in seconds
 
 Notes:
