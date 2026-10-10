@@ -21,6 +21,7 @@ import {
   rekeyCompanyIssueIdentifiers,
 } from "../services/issue-prefix.js";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
+import { lookupAsyncHttpRunToken } from "../adapters/http/async-run.js";
 import { agentRunWritesRevoked } from "../agent-run-cancellation.js";
 import { isUuidLike, normalizeAgentApiKeyScope, type DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
@@ -223,6 +224,14 @@ interface ActorMiddlewareOptions {
 
 const publicRoutineWebhookPath = /^\/api\/routine-triggers\/public\/[a-f0-9]{24}\/fire\/?$/i;
 
+const asyncHttpRunCompletePath =
+  /^\/api\/runs\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/complete\/?$/i;
+
+function asyncHttpRunIdFromRequest(req: Request): string | null {
+  if (req.method !== "POST") return null;
+  return asyncHttpRunCompletePath.exec(req.path)?.[1] ?? null;
+}
+
 const publicMcpGatewayProtocolPath = /^\/mcp\/gateways\/gw_[a-f0-9]{32}\/?$/i;
 
 export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHandler {
@@ -355,6 +364,19 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     if (!key) {
       const claims = verifyLocalAgentJwt(token);
       if (!claims) {
+        const asyncRunId = asyncHttpRunIdFromRequest(req);
+        const asyncRun = asyncRunId ? lookupAsyncHttpRunToken(token, asyncRunId) : null;
+        if (asyncRun) {
+          req.actor = {
+            type: "agent",
+            agentId: asyncRun.agentId,
+            companyId: asyncRun.companyId,
+            runId: asyncRun.runId,
+            source: "agent_jwt",
+          };
+          next();
+          return;
+        }
         next(unauthorized(invalidAgentTokenMessage(token)));
         return;
       }

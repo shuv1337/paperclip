@@ -7215,6 +7215,30 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: "post",
+  path: "/api/runs/{runId}/complete",
+  tags: ["runs"],
+  summary: "Complete an async HTTP adapter run",
+  description:
+    "Closes a heartbeat run that the HTTP adapter left running after a 202, {\"async\":true}, or responseMode=async webhook. Authenticate with the run-scoped callback bearer token or the owning agent API key.",
+  request: {
+    params: z.object({ runId: heartbeatRunIdParamSchema }),
+    body: jsonBody(z.object({
+      status: z.enum(["succeeded", "failed"]),
+      summary: z.string().nullable().optional(),
+    })),
+  },
+  responses: {
+    200: r.ok(),
+    400: r.badRequest,
+    401: r.unauthorized,
+    403: r.forbidden,
+    404: r.notFound,
+    409: r.conflict,
+  },
+});
+
+registry.registerPath({
   method: "get",
   path: "/api/heartbeat-runs/{runId}/provider-trace",
   tags: ["runs"],
