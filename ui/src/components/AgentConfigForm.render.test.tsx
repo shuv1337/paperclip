@@ -259,6 +259,12 @@ function setInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+function setSelectValue(select: HTMLSelectElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+  setter?.call(select, value);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 async function renderForm(
   environments: Environment[],
   agentOverrides: Partial<Agent> = {},
@@ -600,8 +606,12 @@ async function renderStatefulCreateClaudeSandbox(environments: Environment[]) {
   return { container, root, valuesRef };
 }
 
+function environmentSelect(container: ParentNode) {
+  return container.querySelector<HTMLSelectElement>('select:not([aria-label="Role"])');
+}
+
 async function selectEnvironment(container: HTMLElement, environmentId: string) {
-  const select = container.querySelector("select");
+  const select = environmentSelect(container);
   await act(async () => {
     if (select) {
       const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
@@ -742,6 +752,51 @@ describe("AgentConfigForm environment selector", () => {
     vi.clearAllMocks();
   });
 
+  it("saves a role promotion to ceo from the identity section", async () => {
+    const result = await renderForm([], { role: "engineer" });
+    roots.push(result.root);
+
+    const roleSelect = result.container.querySelector<HTMLSelectElement>('select[aria-label="Role"]');
+    expect(roleSelect).toBeTruthy();
+    expect(roleSelect!.value).toBe("engineer");
+    const ceoOption = Array.from(roleSelect!.options).find((option) => option.value === "ceo");
+    expect(ceoOption?.disabled).toBe(false);
+    expect(ceoOption?.textContent).toBe("CEO");
+
+    await act(async () => {
+      setSelectValue(roleSelect!, "ceo");
+    });
+    await flushReact();
+
+    const saveButton = findButton(result.container, "Save");
+    expect(saveButton).toBeTruthy();
+    await act(async () => {
+      saveButton!.click();
+    });
+    await flushReact();
+
+    expect(result.onSave).toHaveBeenCalledWith(expect.objectContaining({ role: "ceo" }));
+  });
+
+  it("names another active CEO and still allows promotion", async () => {
+    mockAgentsApi.list.mockResolvedValue([
+      { id: "ceo-1", name: "Ada", role: "ceo", status: "idle" },
+    ]);
+    const result = await renderForm([], { role: "general" });
+    roots.push(result.root);
+
+    const roleSelect = result.container.querySelector<HTMLSelectElement>('select[aria-label="Role"]');
+    expect(roleSelect).toBeTruthy();
+    await act(async () => {
+      setSelectValue(roleSelect!, "ceo");
+    });
+    await flushUntil(() => (result.container.textContent ?? "").includes("Ada is already CEO"));
+
+    expect(result.container.textContent).toContain("Ada is already CEO");
+    const ceoOption = Array.from(roleSelect!.options).find((option) => option.value === "ceo");
+    expect(ceoOption?.disabled).toBe(false);
+  });
+
   it("promotes environment drafts through the page Save action and discards them through the page Discard action", async () => {
     const dirty = vi.fn();
     let save: (() => void) | null = null;
@@ -849,7 +904,7 @@ describe("AgentConfigForm environment selector", () => {
     roots.push(result.root);
 
     expect(result.container.textContent).not.toContain("Environment override");
-    expect(result.container.querySelector("select")).toBeNull();
+    expect(environmentSelect(result.container)).toBeNull();
   });
 
   it("renders GPT-6 Astra and its model-specific reasoning efforts", async () => {
@@ -976,7 +1031,7 @@ describe("AgentConfigForm environment selector", () => {
     roots.push(result.root);
 
     const text = result.container.textContent ?? "";
-    const selector = result.container.querySelector("select");
+    const selector = environmentSelect(result.container);
 
     expect(text).toContain("Environment");
     expect(text).toContain("Environment override");
@@ -1003,7 +1058,7 @@ describe("AgentConfigForm environment selector", () => {
     roots.push(result.root);
 
     const text = result.container.textContent ?? "";
-    const selector = result.container.querySelector("select");
+    const selector = environmentSelect(result.container);
 
     expect(text).toContain("Environment override");
     expect(selector?.textContent).toContain("E2B · sandbox");
@@ -1025,7 +1080,7 @@ describe("AgentConfigForm environment selector", () => {
     roots.push(result.root);
 
     const text = result.container.textContent ?? "";
-    const selector = result.container.querySelector("select");
+    const selector = environmentSelect(result.container);
 
     expect(text).toContain("Environment override");
     expect(selector?.textContent).toContain("E2B · sandbox");
@@ -1047,7 +1102,7 @@ describe("AgentConfigForm environment selector", () => {
     roots.push(result.root);
 
     const text = result.container.textContent ?? "";
-    const selector = result.container.querySelector("select");
+    const selector = environmentSelect(result.container);
 
     expect(text).toContain("Environment override");
     expect(selector?.textContent).toContain("Default: Local");
@@ -1067,7 +1122,7 @@ describe("AgentConfigForm environment selector", () => {
     ]);
     roots.push(result.root);
 
-    const selector = result.container.querySelector("select");
+    const selector = environmentSelect(result.container);
 
     expect(selector?.textContent).toContain("Default: Paperclip Computer");
     expect(selector?.textContent).toContain("Paperclip Computer");
@@ -2469,7 +2524,7 @@ describe("AgentConfigForm environment selector", () => {
     await runTest(result.container);
     expect(findButton(result.container, "Sign in")).toBeTruthy();
 
-    const select = result.container.querySelector("select");
+    const select = environmentSelect(result.container);
     await act(async () => {
       if (select) {
         const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;

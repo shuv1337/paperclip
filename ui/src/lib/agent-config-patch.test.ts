@@ -59,6 +59,15 @@ function makeOverlay(patch?: Partial<AgentConfigOverlay>): AgentConfigOverlay {
 }
 
 describe("buildAgentUpdatePatch", () => {
+  it("includes a role change from the identity overlay", () => {
+    const patch = buildAgentUpdatePatch(
+      makeAgent(),
+      makeOverlay({ identity: { role: "ceo" } }),
+    );
+
+    expect(patch).toEqual({ role: "ceo" });
+  });
+
   it("merges the agent-scoped provider trace debug setting into runtime config", () => {
     const patch = buildAgentUpdatePatch(
       makeAgent(),

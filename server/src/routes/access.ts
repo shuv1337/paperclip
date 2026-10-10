@@ -46,6 +46,7 @@ import {
   updateMemberPermissionsSchema,
   updateUserCompanyAccessSchema,
   PERMISSION_KEYS,
+  NO_ACTIVE_CEO_JOIN_APPROVAL_CODE,
   isUuidLike,
   resolveAgentJoinRequestAdapterType,
 } from "@paperclipai/shared";
@@ -2349,6 +2350,16 @@ export function resolveJoinRequestAgentManagerId(
   return (rootCeo ?? ceoCandidates[0] ?? null)?.id ?? null;
 }
 
+export function noActiveCeoJoinApprovalError() {
+  return conflict(
+    "Join request cannot be approved because this company has no active CEO",
+    {
+      code: NO_ACTIVE_CEO_JOIN_APPROVAL_CODE,
+      hint: "Set an existing agent's role to CEO, then approve this join request again.",
+    },
+  );
+}
+
 function isInviteTokenHashCollisionError(error: unknown) {
   const candidates = [
     error,
@@ -4365,9 +4376,7 @@ export function accessRoutes(
         const existingAgents = await agents.list(companyId);
         const managerId = resolveJoinRequestAgentManagerId(existingAgents);
         if (!managerId) {
-          throw conflict(
-            "Join request cannot be approved because this company has no active CEO"
-          );
+          throw noActiveCeoJoinApprovalError();
         }
 
         const agentName = deduplicateAgentName(

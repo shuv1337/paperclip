@@ -7,6 +7,7 @@ import {
 } from "@paperclipai/shared";
 import { Shield, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { accessApi, type CompanyMember } from "@/api/access";
+import { joinApprovalErrorToast } from "@/lib/join-approval-error";
 import { agentsApi } from "@/api/agents";
 import { ApiError } from "@/api/client";
 import { cloudApi } from "@/api/cloud";
@@ -152,11 +153,7 @@ export function CompanyAccess() {
       });
     },
     onError: (error) => {
-      pushToast({
-        title: "Failed to approve join request",
-        body: error instanceof Error ? error.message : "Unknown error",
-        tone: "error",
-      });
+      pushToast(joinApprovalErrorToast(error, "Failed to approve join request"));
     },
   });
 
