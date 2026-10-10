@@ -158,6 +158,12 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
     description: "Call an external HTTP endpoint",
     icon: Cpu,
   },
+  grok_bot: {
+    label: "Grok Bot",
+    description: "Wake a Grok Bot webhook and wait for its callback",
+    icon: Bot,
+    experimental: true,
+  },
 };
 
 // ---------------------------------------------------------------------------

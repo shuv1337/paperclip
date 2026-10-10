@@ -53,6 +53,9 @@ describe("buildInviteOnboardingTextDocument", () => {
     expect(text).toContain("Do NOT use /v1/responses or /hooks/*");
     expect(text).toContain('adapterType: "hermes_gateway"');
     expect(text).toContain('"adapterType": "hermes_gateway"');
+    expect(text).toContain('"adapterType": "grok_bot"');
+    expect(text).toContain("agentDefaultsPayload.webhookUrl");
+    expect(text).toContain("agentDefaultsPayload.webhookKey");
     expect(text).toContain("API_SERVER_ENABLED=true");
     expect(text).toContain("API_SERVER_KEY");
     expect(text).toContain("Set agentDefaultsPayload.apiKey to the exact same value as API_SERVER_KEY");

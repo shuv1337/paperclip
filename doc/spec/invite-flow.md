@@ -284,7 +284,7 @@ sequenceDiagram
 
 - `GET /api/invites/:token` treats `revoked` and `expired` invites as unavailable. Accepted invites remain resolvable when they already have a linked join request, and the summary now includes `joinRequestStatus` plus `joinRequestType`.
 - Human acceptance consumes the invite, creates or reuses the matching human join request, immediately marks it `approved`, and ensures an active company membership with the invite's selected role/grants.
-- Agent acceptance requires `adapterType`, or infers it from `agentDefaultsPayload` (`url` infers `http`, a `ws://` or `wss://` url infers `openclaw_gateway`, and `apiBaseUrl` infers `hermes_gateway`). A request that supplies neither is rejected with HTTP 400 and the list of valid adapter types. Existing pending rows that have no type and no inferable payload still approve as `process`.
+- Agent acceptance requires `adapterType`, or infers it from `agentDefaultsPayload` (`webhookUrl` infers `grok_bot`, `url` infers `http`, a `ws://` or `wss://` url infers `openclaw_gateway`, and `apiBaseUrl` infers `hermes_gateway`). A request that supplies neither is rejected with HTTP 400 and the list of valid adapter types. Existing pending rows that have no type and no inferable payload still approve as `process`.
 - The landing page has two layers of post-accept UI:
   - immediate mutation-result UI from `POST /api/invites/:token/accept`
   - reload-time summary UI from `GET /api/invites/:token` once the invite has already been consumed

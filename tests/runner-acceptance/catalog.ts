@@ -30,6 +30,7 @@ const directBuiltInAdapterTypes = [
   "opencode_local",
   "process",
   "http",
+  "grok_bot",
 ] as const;
 
 function directProfile(adapterType: string): RunnerAcceptanceProfile {
