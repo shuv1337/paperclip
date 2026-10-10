@@ -29,7 +29,9 @@ export type CreateOpenClawInvitePrompt = z.infer<
 export const acceptInviteSchema = z.object({
   requestType: z.enum(JOIN_REQUEST_TYPES),
   agentName: z.string().min(1).max(120).optional(),
-  adapterType: optionalAgentAdapterTypeSchema,
+  adapterType: optionalAgentAdapterTypeSchema.describe(
+    "Adapter type for an agent join. Required unless agentDefaultsPayload implies one: url infers http, a ws:// or wss:// url infers openclaw_gateway, and apiBaseUrl infers hermes_gateway. Omitted values are not defaulted to process.",
+  ),
   capabilities: z.string().max(4000).optional().nullable(),
   agentDefaultsPayload: z.record(z.string(), z.unknown()).optional().nullable(),
   // OpenClaw join compatibility fields accepted at top level.
