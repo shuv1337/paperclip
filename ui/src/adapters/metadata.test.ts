@@ -32,9 +32,29 @@ describe("adapter metadata", () => {
     ]);
   });
 
-  it("keeps intentionally withheld built-in adapters marked as coming soon", () => {
+  it("keeps the process adapter withheld and enables http", () => {
     expect(isEnabledAdapterType("process")).toBe(false);
-    expect(isEnabledAdapterType("http")).toBe(false);
+    expect(isValidAdapterType("process")).toBe(false);
+    expect(isEnabledAdapterType("http")).toBe(true);
+    expect(isValidAdapterType("http")).toBe(true);
+    expect(isVisualAdapterChoice("http")).toBe(true);
+
+    expect(
+      listAdapterOptions((type) => type, [
+        {
+          ...externalAdapter,
+          type: "http",
+        },
+      ]),
+    ).toEqual([
+      {
+        value: "http",
+        label: "http",
+        comingSoon: false,
+        hidden: false,
+        experimental: false,
+      },
+    ]);
   });
 
   it("marks the retired ACPX adapter as unavailable for new selections", () => {

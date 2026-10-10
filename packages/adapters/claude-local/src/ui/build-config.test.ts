@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CreateConfigValues } from "@paperclipai/adapter-utils";
+import { DEFAULT_CLAUDE_LOCAL_TIMEOUT_SEC } from "../index.js";
 import { buildClaudeLocalConfig } from "./build-config.js";
 
 function makeValues(overrides: Partial<CreateConfigValues> = {}): CreateConfigValues {
@@ -37,6 +38,10 @@ function makeValues(overrides: Partial<CreateConfigValues> = {}): CreateConfigVa
 }
 
 describe("buildClaudeLocalConfig", () => {
+  it("persists the local timeout default when the form leaves timeoutSec unset", () => {
+    expect(buildClaudeLocalConfig(makeValues()).timeoutSec).toBe(DEFAULT_CLAUDE_LOCAL_TIMEOUT_SEC);
+  });
+
   it("omits engine for the auto default so runtime fallback remains available", () => {
     const config = buildClaudeLocalConfig(makeValues({ claudeEngine: "auto" }));
 

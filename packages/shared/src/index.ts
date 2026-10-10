@@ -1,6 +1,14 @@
 export * from "./slack-app-manifest.js";
 export { composioAppSetupSchema, composioAppsRefreshSchema, composioAppsSyncSchema, composioAppAccountSchema, type ComposioAppSetupInput, type ComposioAppSetupResult, type ComposioAppAccountInput, type ComposioAppAccount, type ComposioAppSnapshot, type ComposioAppSyncState, type ComposioAppsResponse } from "./composio-app-setup.js";
-export { agentAdapterTypeSchema, optionalAgentAdapterTypeSchema } from "./adapter-type.js";
+export {
+  agentAdapterTypeSchema,
+  optionalAgentAdapterTypeSchema,
+  inferAdapterTypeFromAgentDefaultsPayload,
+  agentJoinAdapterTypeRequiredMessage,
+  resolveAgentJoinRequestAdapterType,
+  type AgentJoinAdapterTypeSource,
+  type AgentJoinAdapterTypeResolution,
+} from "./adapter-type.js";
 export {
   RUNNER_GOAL_MAX_OBJECTIVE_CHARS,
   runnerGoalAvailabilitySchema,
@@ -398,6 +406,7 @@ export {
   AGENT_ADAPTER_TYPES,
   AGENT_ROLES,
   AGENT_ROLE_LABELS,
+  NO_ACTIVE_CEO_JOIN_APPROVAL_CODE,
   AGENT_DEFAULT_MAX_CONCURRENT_RUNS,
   WORKSPACE_BRANCH_ROUTINE_VARIABLE,
   ADAPTER_AGNOSTIC_KEYS,

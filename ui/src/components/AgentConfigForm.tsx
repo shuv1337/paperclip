@@ -21,7 +21,7 @@ import type {
   EnvSecretRefBinding,
   Environment,
 } from "@paperclipai/shared";
-import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, supportedEnvironmentDriversForAdapter, isValidBrowserCode, ADAPTER_AUTH_MISSING_CHECK_CODE } from "@paperclipai/shared";
+import { AGENT_DEFAULT_MAX_CONCURRENT_RUNS, AGENT_ROLES, supportedEnvironmentDriversForAdapter, isValidBrowserCode, ADAPTER_AUTH_MISSING_CHECK_CODE } from "@paperclipai/shared";
 import type { AdapterModel } from "../api/agents";
 import { agentsApi } from "../api/agents";
 import { ApiError } from "../api/client";
@@ -75,6 +75,7 @@ import {
   DraftNumberInput,
   help,
   adapterLabels,
+  roleLabels,
 } from "./agent-config-primitives";
 import { defaultCreateValues } from "./agent-config-defaults";
 import { getUIAdapter } from "../adapters";
@@ -95,6 +96,7 @@ import { listAdapterOptions, listVisibleAdapterTypes } from "../adapters/metadat
 import { getAdapterDisplay, getAdapterLabel } from "../adapters/adapter-display-registry";
 import { useDisabledAdaptersSync } from "../adapters/use-disabled-adapters";
 import { buildAgentUpdatePatch, omitUndefinedEntries, type AgentConfigOverlay } from "../lib/agent-config-patch";
+import { findOtherActiveCeo } from "../lib/agent-role";
 import { useAdapterCapabilities } from "../adapters/use-adapter-capabilities";
 import { resolveForcedKubernetesEnvironment } from "../lib/forced-kubernetes-environment";
 import { codexReasoningEffortOptions } from "../lib/codex-reasoning-effort";
@@ -336,6 +338,49 @@ function ConfigSections({ order, className, children }: {
   };
   const sections = Children.toArray(children).sort((a, b) => rank(a) - rank(b));
   return <div className={className}>{sections}</div>;
+}
+
+function AgentRoleSelect({
+  agentId,
+  persistedRole,
+  value,
+  agents,
+  onChange,
+}: {
+  agentId: string;
+  persistedRole: string;
+  value: string;
+  agents: ReadonlyArray<{ id: string; name: string; role: string; status: string }>;
+  onChange: (role: string) => void;
+}) {
+  const knownRoles = AGENT_ROLES as readonly string[];
+  const roleOptions = knownRoles.includes(persistedRole)
+    ? [...AGENT_ROLES]
+    : [persistedRole, ...AGENT_ROLES];
+  // Agent update does not reject a second non-terminated CEO, so CEO stays
+  // selectable. The note names the overlap; join approval still picks the root CEO.
+  const otherCeo = value === "ceo" ? findOtherActiveCeo(agents, agentId) : null;
+
+  return (
+    <>
+      <NativeSelect
+        aria-label="Role"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {roleOptions.map((role) => (
+          <option key={role} value={role}>
+            {roleLabels[role] ?? role}
+          </option>
+        ))}
+      </NativeSelect>
+      {otherCeo ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          {otherCeo.name} is already CEO. Join approvals use the root CEO when more than one CEO exists.
+        </p>
+      ) : null}
+    </>
+  );
 }
 
 /* ---- Form ---- */
@@ -1486,6 +1531,15 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 immediate
                 className={inputClass}
                 placeholder="e.g. VP of Engineering"
+              />
+            </Field>
+            <Field label="Role" hint={help.role}>
+              <AgentRoleSelect
+                agentId={props.agent.id}
+                persistedRole={props.agent.role}
+                value={eff("identity", "role", props.agent.role)}
+                agents={companyAgents}
+                onChange={(role) => mark("identity", "role", role)}
               />
             </Field>
             <Field label="Reports to" hint={help.reportsTo}>

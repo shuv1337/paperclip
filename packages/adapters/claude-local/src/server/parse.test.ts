@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_REMOTE_SANDBOX_ADAPTER_TIMEOUT_SEC } from "@paperclipai/adapter-utils/execution-target";
+import type { AdapterExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
+import { DEFAULT_CLAUDE_LOCAL_TIMEOUT_SEC } from "../index.js";
 import {
   claudeModelUsageTotals,
   parseClaudeStreamJson,
+  CLAUDE_LOGIN_EXPIRED_ERROR_CODE,
+  CLAUDE_LOGIN_EXPIRED_MESSAGE,
+  detectClaudeExpiredOAuth,
   detectClaudeLoginRequired,
+  resetClaudeTimeoutDefaultNoticeForTests,
+  resolveClaudeRunTimeoutSec,
+  takeClaudeTimeoutDefaultNotice,
   extractClaudeRetryNotBefore,
   isClaudeProviderQuotaError,
   isClaudeTransientUpstreamError,
@@ -132,6 +141,66 @@ describe("detectClaudeLoginRequired", () => {
     };
     expect(detectClaudeLoginRequired(input).requiresLogin).toBe(false);
     expect(isClaudeTransientUpstreamError(input)).toBe(true);
+  });
+
+  it("replaces a raw expired OAuth 401 with a re-login error", () => {
+    expect(
+      detectClaudeExpiredOAuth({
+        parsed: {
+          is_error: true,
+          subtype: "success",
+          api_error_status: 401,
+          error: "authentication_error",
+          result: "401 OAuth access token has expired",
+        },
+        stderr: "",
+      }),
+    ).toEqual({
+      errorCode: CLAUDE_LOGIN_EXPIRED_ERROR_CODE,
+      errorMessage: CLAUDE_LOGIN_EXPIRED_MESSAGE,
+    });
+  });
+
+  it("classifies stderr authentication_error and invalid bearer 401 as expired login", () => {
+    expect(
+      detectClaudeExpiredOAuth({
+        parsed: null,
+        stderr: "API Error: 401 Invalid bearer token",
+        errorMessage: "authentication_error",
+      }),
+    ).toEqual({
+      errorCode: "claude_auth_required",
+      errorMessage: CLAUDE_LOGIN_EXPIRED_MESSAGE,
+    });
+    expect(CLAUDE_LOGIN_EXPIRED_MESSAGE).toBe(
+      "Claude login expired on the host - re-login via Paperclip AI connections (Claude) or run `claude login` on the server",
+    );
+  });
+
+  it("does not treat a successful answer that quotes an expired token as a login failure", () => {
+    expect(
+      detectClaudeExpiredOAuth({
+        parsed: {
+          is_error: false,
+          subtype: "success",
+          result: "The API said 401 OAuth access token has expired.",
+        },
+        stderr: "",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not treat a bare 401 without OAuth language as expired login", () => {
+    expect(
+      detectClaudeExpiredOAuth({
+        parsed: {
+          is_error: true,
+          api_error_status: 401,
+          result: "API Error: 401 model overloaded",
+        },
+        stderr: "",
+      }),
+    ).toBeNull();
   });
 
   it("does not treat a bare token phrase in raw stdout with no parsed result as login required", () => {
@@ -579,5 +648,34 @@ describe("interrupted Claude accounting", () => {
     expect(parsed.usage).toEqual({ inputTokens: 35, cachedInputTokens: 40, outputTokens: 9 });
     expect(parsed.usageBasis).toBe("per_run");
     expect(parsed.costUsd).toBeNull();
+  });
+});
+
+describe("resolveClaudeRunTimeoutSec", () => {
+  const sandbox = {
+    kind: "remote",
+    transport: "sandbox",
+    remoteCwd: "/workspace",
+  } as AdapterExecutionTarget;
+
+  it("uses the local default when timeoutSec is unset and warns once", () => {
+    resetClaudeTimeoutDefaultNoticeForTests();
+    expect(resolveClaudeRunTimeoutSec(null, 0)).toEqual({
+      timeoutSec: DEFAULT_CLAUDE_LOCAL_TIMEOUT_SEC,
+      appliedDefault: true,
+    });
+    expect(resolveClaudeRunTimeoutSec({ kind: "local" } as AdapterExecutionTarget, 0).appliedDefault).toBe(true);
+    const notice = takeClaudeTimeoutDefaultNotice();
+    expect(notice).toContain(`default of ${DEFAULT_CLAUDE_LOCAL_TIMEOUT_SEC}s`);
+    expect(takeClaudeTimeoutDefaultNotice()).toBeNull();
+  });
+
+  it("keeps an explicit timeout, a negative opt-out, and the sandbox default", () => {
+    expect(resolveClaudeRunTimeoutSec(null, 90)).toEqual({ timeoutSec: 90, appliedDefault: false });
+    expect(resolveClaudeRunTimeoutSec(null, -1)).toEqual({ timeoutSec: 0, appliedDefault: false });
+    expect(resolveClaudeRunTimeoutSec(sandbox, 0)).toEqual({
+      timeoutSec: DEFAULT_REMOTE_SANDBOX_ADAPTER_TIMEOUT_SEC,
+      appliedDefault: false,
+    });
   });
 });

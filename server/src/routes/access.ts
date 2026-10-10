@@ -10,6 +10,7 @@ import type { IncomingMessage, RequestOptions as HttpRequestOptions } from "node
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
+import type { NetworkInterfaceInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Router } from "express";
@@ -45,7 +46,9 @@ import {
   updateMemberPermissionsSchema,
   updateUserCompanyAccessSchema,
   PERMISSION_KEYS,
+  NO_ACTIVE_CEO_JOIN_APPROVAL_CODE,
   isUuidLike,
+  resolveAgentJoinRequestAdapterType,
 } from "@paperclipai/shared";
 import type { DeploymentExposure, DeploymentMode, HumanCompanyMembershipRole } from "@paperclipai/shared";
 import {
@@ -1678,10 +1681,69 @@ function buildOnboardingDiscoveryDiagnostics(input: {
   return diagnostics;
 }
 
-function buildOnboardingConnectionCandidates(input: {
+function isUnspecifiedBindHost(hostname: string): boolean {
+  const value = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return value === "0.0.0.0" || value === "::" || value === "0:0:0:0:0:0:0:0";
+}
+
+/**
+ * The Paperclip process serves plain HTTP unless it terminates TLS itself.
+ * Anything else, including a missing value, stays on http.
+ */
+function resolveOnboardingListenScheme(value: string | undefined): "http" | "https" {
+  const normalized = value?.trim().toLowerCase().replace(/:$/, "");
+  return normalized === "https" ? "https" : "http";
+}
+
+function resolveOnboardingListenPort(
+  explicit: number | undefined,
+  base: URL | null,
+  scheme: "http" | "https",
+): number {
+  if (typeof explicit === "number" && Number.isInteger(explicit) && explicit > 0 && explicit <= 65535) {
+    return explicit;
+  }
+  if (base?.port) {
+    const parsed = Number(base.port);
+    if (Number.isInteger(parsed) && parsed > 0 && parsed <= 65535) return parsed;
+  }
+  return scheme === "https" ? 443 : 80;
+}
+
+function formatListenOrigin(scheme: "http" | "https", host: string, port: number): string {
+  const formattedHost =
+    host.includes(":") && !host.startsWith("[") && !host.endsWith("]")
+      ? `[${host}]`
+      : host;
+  return `${scheme}://${formattedHost}:${port}`;
+}
+
+function pushOnboardingCandidate(candidates: string[], seen: Set<string>, rawUrl: string | null | undefined) {
+  const trimmed = rawUrl?.trim();
+  if (!trimmed) return;
+  try {
+    const origin = new URL(trimmed).origin;
+    if (seen.has(origin)) return;
+    seen.add(origin);
+    candidates.push(origin);
+  } catch {
+    // Ignore malformed candidates.
+  }
+}
+
+export function buildOnboardingConnectionCandidates(input: {
   apiBaseUrl: string;
   bindHost: string;
   allowedHostnames: string[];
+  /** Process listen port (`config.server.port` / `PORT`, after bind). */
+  listenPort?: number;
+  /**
+   * Process listen scheme. `http` unless this process terminates TLS.
+   * A proxy in front of the process (Tailscale Serve, for example) does not
+   * change this value; that proxy URL stays the first candidate as-is.
+   */
+  listenScheme?: "http" | "https";
+  networkInterfacesMap?: NodeJS.Dict<NetworkInterfaceInfo[]>;
 }): string[] {
   let base: URL | null = null;
   try {
@@ -1692,35 +1754,43 @@ function buildOnboardingConnectionCandidates(input: {
     base = null;
   }
 
-  const protocol = base?.protocol ?? "http:";
-  const port = base?.port ? `:${base.port}` : "";
-  const candidates = new Set<string>();
+  const listenScheme = resolveOnboardingListenScheme(input.listenScheme);
+  const listenPort = resolveOnboardingListenPort(input.listenPort, base, listenScheme);
+  const candidates: string[] = [];
+  const seen = new Set<string>();
 
+  // Candidate 1 is the public origin exactly as configured. Its scheme and
+  // port belong to the proxy or public URL, not to the process listen socket.
   if (base) {
-    candidates.add(base.origin);
+    pushOnboardingCandidate(candidates, seen, base.origin);
   }
 
-  const bindHost = normalizeHostname(input.bindHost);
-  if (bindHost && !isLoopbackHost(bindHost)) {
-    candidates.add(`${protocol}//${bindHost}${port}`);
+  for (const host of collectReachableInterfaceHosts({
+    networkInterfacesMap: input.networkInterfacesMap,
+  })) {
+    pushOnboardingCandidate(candidates, seen, formatListenOrigin(listenScheme, host, listenPort));
   }
 
   for (const rawHost of input.allowedHostnames) {
     const host = normalizeHostname(rawHost);
     if (!host) continue;
-    candidates.add(`${protocol}//${host}${port}`);
+    pushOnboardingCandidate(candidates, seen, formatListenOrigin(listenScheme, host, listenPort));
+  }
+
+  const bindHost = normalizeHostname(input.bindHost);
+  if (bindHost && !isLoopbackHost(bindHost) && !isUnspecifiedBindHost(bindHost)) {
+    pushOnboardingCandidate(candidates, seen, formatListenOrigin(listenScheme, bindHost, listenPort));
   }
 
   if (base && isLoopbackHost(base.hostname)) {
-    candidates.add(`${protocol}//host.docker.internal${port}`);
+    pushOnboardingCandidate(
+      candidates,
+      seen,
+      formatListenOrigin(listenScheme, "host.docker.internal", listenPort),
+    );
   }
 
-  for (const host of collectReachableInterfaceHosts()) {
-    const formattedHost = host.includes(":") && !host.startsWith("[") && !host.endsWith("]") ? `[${host}]` : host;
-    candidates.add(`${protocol}//${formattedHost}${port}`);
-  }
-
-  return Array.from(candidates);
+  return candidates;
 }
 
 function buildInviteOnboardingManifest(
@@ -1734,6 +1804,8 @@ function buildInviteOnboardingManifest(
     bindHost: string;
     allowedHostnames: string[];
     authPublicBaseUrl?: string;
+    listenPort?: number;
+    listenScheme?: "http" | "https";
   }
 ) {
   const baseUrl = resolveBaseUrl(req, opts.authPublicBaseUrl);
@@ -1757,7 +1829,9 @@ function buildInviteOnboardingManifest(
   const connectionCandidates = buildOnboardingConnectionCandidates({
     apiBaseUrl: baseUrl,
     bindHost: opts.bindHost,
-    allowedHostnames: opts.allowedHostnames
+    allowedHostnames: opts.allowedHostnames,
+    listenPort: opts.listenPort,
+    listenScheme: opts.listenScheme,
   });
 
   return {
@@ -1770,14 +1844,14 @@ function buildInviteOnboardingManifest(
     ),
     onboarding: {
       instructions:
-        "Join as an external Paperclip agent, save your one-time claim secret, wait for board approval, then claim your Paperclip API key through the standard claim endpoint. Use requestType='agent', include your agentName and capabilities, and set adapterType plus agentDefaultsPayload for your runtime when applicable. Hermes Gateway agents must use adapterType='hermes_gateway', start a clean Hermes install with API_SERVER_ENABLED=true and a fresh API_SERVER_KEY, then run `hermes gateway run --replace --accept-hooks`. Put the Hermes gateway URL in agentDefaultsPayload.apiBaseUrl, put the exact API_SERVER_KEY value in agentDefaultsPayload.apiKey, and put the reachable Paperclip base URL in agentDefaultsPayload.paperclipApiUrl. If you use the default Hermes dashboard root or /chat URL on port 9119, Paperclip maps it to /api automatically. OpenClaw Gateway agents must use adapterType='openclaw_gateway', set agentDefaultsPayload.url to a ws:// or wss:// gateway endpoint, and include agentDefaultsPayload.headers.x-openclaw-token.",
+        "Join as an external Paperclip agent, save your one-time claim secret, wait for board approval, then claim your Paperclip API key through the standard claim endpoint. Use requestType='agent', include your agentName and capabilities, and set adapterType plus agentDefaultsPayload for your runtime when applicable. If adapterType is omitted, Paperclip infers it from agentDefaultsPayload when possible (url infers http, a ws:// or wss:// url infers openclaw_gateway, and apiBaseUrl infers hermes_gateway). Otherwise the join request is rejected with HTTP 400 and the list of valid adapter types. Paperclip does not default a missing adapterType to process. Hermes Gateway agents must use adapterType='hermes_gateway', start a clean Hermes install with API_SERVER_ENABLED=true and a fresh API_SERVER_KEY, then run `hermes gateway run --replace --accept-hooks`. Put the Hermes gateway URL in agentDefaultsPayload.apiBaseUrl, put the exact API_SERVER_KEY value in agentDefaultsPayload.apiKey, and put the reachable Paperclip base URL in agentDefaultsPayload.paperclipApiUrl. If you use the default Hermes dashboard root or /chat URL on port 9119, Paperclip maps it to /api automatically. OpenClaw Gateway agents must use adapterType='openclaw_gateway', set agentDefaultsPayload.url to a ws:// or wss:// gateway endpoint, and include agentDefaultsPayload.headers.x-openclaw-token.",
       inviteMessage: extractInviteMessage(invite),
       recommendedAdapterType: null,
       requiredFields: {
         requestType: "agent",
         agentName: "Display name for this agent",
         adapterType:
-          "Adapter type for this runtime. Use 'openclaw_gateway' only for OpenClaw Gateway agents. Use 'hermes_gateway' only for Hermes Gateway agents.",
+          "Adapter type for this runtime. Required unless agentDefaultsPayload implies one (url infers http, a ws:// or wss:// url infers openclaw_gateway, apiBaseUrl infers hermes_gateway). A missing adapterType is not defaulted to process. Use 'openclaw_gateway' only for OpenClaw Gateway agents. Use 'hermes_gateway' only for Hermes Gateway agents.",
         capabilities: "Optional capability summary",
         agentDefaultsPayload:
           "Runtime-specific adapter config. OpenClaw Gateway agents must include url (ws:// or wss://) and headers.x-openclaw-token. Hermes Gateway agents must include apiBaseUrl, apiKey set to the Hermes API_SERVER_KEY, and paperclipApiUrl. A default Hermes dashboard root or /chat URL such as http://127.0.0.1:9119/chat is accepted and maps to /api. Other runtimes should include the config their adapter expects."
@@ -1834,6 +1908,8 @@ export function buildInviteOnboardingTextDocument(
     bindHost: string;
     allowedHostnames: string[];
     authPublicBaseUrl?: string;
+    listenPort?: number;
+    listenScheme?: "http" | "https";
   }
 ) {
   const manifest = buildInviteOnboardingManifest(req, token, invite, opts);
@@ -1895,7 +1971,7 @@ export function buildInviteOnboardingTextDocument(
 
     Decide which Paperclip adapter type matches your runtime.
 
-    Use adapterType only when there is a matching Paperclip adapter. Put runtime-specific settings in agentDefaultsPayload.
+    Use adapterType only when there is a matching Paperclip adapter. Put runtime-specific settings in agentDefaultsPayload. If you omit adapterType, Paperclip infers http from agentDefaultsPayload.url, openclaw_gateway from a ws:// or wss:// url, and hermes_gateway from agentDefaultsPayload.apiBaseUrl. If it cannot infer a type, the request fails with HTTP 400 and the list of valid adapter types. A missing adapterType is not defaulted to process.
 
     ## Step 1: Submit agent join request
     ${onboarding.registrationEndpoint.method} ${
@@ -2274,6 +2350,16 @@ export function resolveJoinRequestAgentManagerId(
   return (rootCeo ?? ceoCandidates[0] ?? null)?.id ?? null;
 }
 
+export function noActiveCeoJoinApprovalError() {
+  return conflict(
+    "Join request cannot be approved because this company has no active CEO",
+    {
+      code: NO_ACTIVE_CEO_JOIN_APPROVAL_CODE,
+      hint: "Set an existing agent's role to CEO, then approve this join request again.",
+    },
+  );
+}
+
 function isInviteTokenHashCollisionError(error: unknown) {
   const candidates = [
     error,
@@ -2634,6 +2720,8 @@ export function accessRoutes(
     inviteResolutionNetwork?: Partial<InviteResolutionNetwork>;
     inviteRateLimiter?: InviteRateLimiter;
     authPublicBaseUrl?: string;
+    listenPort?: number;
+    listenScheme?: "http" | "https";
   }
 ) {
   const router = Router();
@@ -3765,7 +3853,20 @@ export function accessRoutes(
             requestEmailSnapshot: actorEmail,
           })
         );
-      const adapterType = req.body.adapterType ?? null;
+      let adapterType: string | null = req.body.adapterType ?? null;
+      if (requestType === "agent" && !inviteAlreadyAccepted) {
+        const resolution = resolveAgentJoinRequestAdapterType({
+          adapterType,
+          agentDefaultsPayload: req.body.agentDefaultsPayload ?? null,
+        });
+        if (!resolution.ok) {
+          throw badRequest(resolution.message, {
+            code: "adapter_type_required",
+            validAdapterTypes: [...resolution.validAdapterTypes],
+          });
+        }
+        adapterType = resolution.adapterType;
+      }
       if (requestType === "agent") {
         assertLegacyAgentInviteAdapterType(
           adapterType ?? existingJoinRequestForInvite?.adapterType ?? null,
@@ -4225,6 +4326,7 @@ export function accessRoutes(
       if (!invite) throw notFound("Invite not found");
 
       let createdAgentId: string | null = existing.createdAgentId ?? null;
+      let resolvedAgentAdapterType: string | null = null;
       if (existing.requestType === "human") {
         if (!existing.requestingUserId)
           throw conflict("Join request missing user identity");
@@ -4250,13 +4352,31 @@ export function accessRoutes(
           req.actor.userId ?? null
         );
       } else {
-        assertLegacyAgentInviteAdapterType(existing.adapterType);
+        const adapterResolution = resolveAgentJoinRequestAdapterType({
+          adapterType: existing.adapterType,
+          agentDefaultsPayload: existing.agentDefaultsPayload,
+          // Rows created before adapterType was required can still be approved.
+          // Inference runs first. Process is only the leftover for those rows.
+          allowLegacyProcessFallback: true,
+        });
+        if (!adapterResolution.ok) {
+          throw badRequest(adapterResolution.message, {
+            code: "adapter_type_required",
+            validAdapterTypes: [...adapterResolution.validAdapterTypes],
+          });
+        }
+        resolvedAgentAdapterType = adapterResolution.adapterType;
+        assertLegacyAgentInviteAdapterType(resolvedAgentAdapterType);
+        if (adapterResolution.source === "legacy") {
+          logger.warn(
+            { companyId, joinRequestId: requestId },
+            "approving legacy agent join request without adapterType; using process",
+          );
+        }
         const existingAgents = await agents.list(companyId);
         const managerId = resolveJoinRequestAgentManagerId(existingAgents);
         if (!managerId) {
-          throw conflict(
-            "Join request cannot be approved because this company has no active CEO"
-          );
+          throw noActiveCeoJoinApprovalError();
         }
 
         const agentName = deduplicateAgentName(
@@ -4275,7 +4395,7 @@ export function accessRoutes(
           status: "idle",
           reportsTo: managerId,
           capabilities: existing.capabilities ?? null,
-          adapterType: existing.adapterType ?? "process",
+          adapterType: adapterResolution.adapterType,
           adapterConfig:
             existing.agentDefaultsPayload &&
             typeof existing.agentDefaultsPayload === "object"
@@ -4317,6 +4437,9 @@ export function accessRoutes(
             req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
           approvedAt: new Date(),
           createdAgentId,
+          ...(resolvedAgentAdapterType
+            ? { adapterType: resolvedAgentAdapterType }
+            : {}),
           updatedAt: new Date()
         })
         .where(eq(joinRequests.id, requestId))

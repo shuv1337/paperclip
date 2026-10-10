@@ -1,4 +1,5 @@
 import { envBindingSchema, type SecretProjectionClass, type SecretVersionSelector } from "@paperclipai/shared";
+import { planHttpHeaders } from "../adapters/http/headers.js";
 
 interface AgentSecretBindingSyncService {
   syncSecretRefsForTarget?: (
@@ -73,8 +74,19 @@ export function collectSecretRefs(adapterConfig: unknown): Array<{
     });
   }
 
+  for (const entry of planHttpHeaders(config.headers) ?? []) {
+    if (entry.kind !== "secret_ref") continue;
+    refs.push({
+      secretId: entry.ref.secretId,
+      configPath: entry.ref.configPath,
+      versionSelector: entry.ref.version,
+      projectionClass: entry.ref.projectionClass,
+      projectionAllowlistKey: entry.ref.projectionAllowlistKey ?? null,
+    });
+  }
+
   for (const [key, rawBinding] of Object.entries(config)) {
-    if (key === "env") continue;
+    if (key === "env" || key === "headers") continue;
     const parsed = envBindingSchema.safeParse(rawBinding);
     if (!parsed.success) continue;
     const binding = parsed.data;
@@ -126,8 +138,20 @@ export function collectUserSecretRefs(adapterConfig: unknown): Array<{
     });
   }
 
+  for (const entry of planHttpHeaders(config.headers) ?? []) {
+    if (entry.kind !== "user_secret_ref") continue;
+    refs.push({
+      definitionKey: entry.ref.definitionKey,
+      configPath: entry.ref.configPath,
+      envKey: entry.ref.name,
+      versionSelector: entry.ref.version,
+      required: entry.ref.required,
+      allowMissingOverride: entry.ref.allowMissingOverride,
+    });
+  }
+
   for (const [key, rawBinding] of Object.entries(config)) {
-    if (key === "env") continue;
+    if (key === "env" || key === "headers") continue;
     const parsed = envBindingSchema.safeParse(rawBinding);
     if (!parsed.success) continue;
     const binding = parsed.data;

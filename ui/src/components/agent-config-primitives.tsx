@@ -22,7 +22,7 @@ import { AGENT_ROLE_LABELS } from "@paperclipai/shared";
 export const help: Record<string, string> = {
   name: "Display name for this agent.",
   title: "Job title shown in the org chart.",
-  role: "Organizational role. Determines position and capabilities.",
+  role: "Organizational role. Join approvals assign new agents to the CEO. Promote an agent to CEO here when the company has none.",
   reportsTo: "The agent this one reports to in the org hierarchy.",
   capabilities: "Describes what this agent can do. Shown in the org chart and used for task routing.",
   adapterType: "How this agent runs: local CLI (Claude/Codex/OpenCode), OpenClaw Gateway, spawned process, or generic HTTP webhook.",

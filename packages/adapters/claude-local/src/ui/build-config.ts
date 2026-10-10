@@ -1,4 +1,5 @@
 import { buildAdapterEnvConfig, type CreateConfigValues } from "@paperclipai/adapter-utils";
+import { DEFAULT_CLAUDE_LOCAL_TIMEOUT_SEC } from "../index.js";
 
 function parseCommaArgs(value: string): string[] {
   return value
@@ -39,7 +40,7 @@ export function buildClaudeLocalConfig(v: CreateConfigValues): Record<string, un
   if (v.model) ac.model = v.model;
   if (v.thinkingEffort) ac.effort = v.thinkingEffort;
   if (v.chrome) ac.chrome = true;
-  ac.timeoutSec = 0;
+  ac.timeoutSec = DEFAULT_CLAUDE_LOCAL_TIMEOUT_SEC;
   ac.graceSec = 15;
   const env = buildAdapterEnvConfig(v.envBindings, v.envVars);
   if (Object.keys(env).length > 0) ac.env = env;

@@ -64,6 +64,7 @@ import type {
 import { isSecretProviderClientError } from "../secrets/types.js";
 import { authorizationDeniedDetails, authorizationService } from "./authorization.js";
 import { findActiveServerAdapter } from "../adapters/index.js";
+import { canonicalHttpHeaders, planHttpHeaders } from "../adapters/http/headers.js";
 import { logActivity } from "./activity-log.js";
 // Only a `local_encrypted` secret can hold a literal directory path, so only a
 // `local_encrypted` secret can ever name a Codex account-home directory. A
@@ -1953,6 +1954,20 @@ export function secretService(db: Db | DbTransaction) {
         delete normalized[key];
       } else {
         normalized[key] = value;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(adapterConfig, "headers")) {
+      const canonical = canonicalHttpHeaders(adapterConfig.headers);
+      if (canonical && "error" in canonical) {
+        throw unprocessable(canonical.error);
+      }
+      if (canonical) {
+        for (const entry of planHttpHeaders(adapterConfig.headers) ?? []) {
+          if (entry.kind === "secret_ref") {
+            await assertSecretInCompany(companyId, entry.ref.secretId);
+          }
+        }
+        normalized.headers = canonical.headers;
       }
     }
     return normalized;
@@ -5684,6 +5699,68 @@ export function secretService(db: Db | DbTransaction) {
         resolved[key] = secretResolution.value;
         manifest.push(secretResolution.manifestEntry);
         secretKeys.add(key);
+      }
+      const plannedHeaders = planHttpHeaders(adapterConfig.headers);
+      if (plannedHeaders) {
+        const resolvedHeaders: Record<string, unknown> = {};
+        for (const entry of plannedHeaders) {
+          if (entry.kind === "invalid_secret_ref") {
+            throw unprocessable(`Invalid HTTP header secret reference: ${entry.name}`);
+          }
+          if (entry.kind === "plain" || entry.kind === "passthrough") {
+            resolvedHeaders[entry.name] = entry.value;
+            continue;
+          }
+          if (entry.kind === "user_secret_ref") {
+            if (opts?.skipUserSecrets) continue;
+            const secretResolution = await secretService(db).resolveUserSecretValue(
+              companyId,
+              {
+                definitionKey: entry.ref.definitionKey,
+                version: entry.ref.version,
+                required: entry.ref.required,
+                allowMissingOverride: entry.ref.allowMissingOverride,
+              },
+              context
+                ? ownerScoped
+                  ? {
+                      ...context,
+                      responsibleUserId: context.responsibleUserId ?? null,
+                    }
+                  : {
+                      ...context,
+                      configPath: entry.ref.configPath,
+                      responsibleUserId: context.responsibleUserId ?? null,
+                    }
+                : undefined,
+            );
+            if (secretResolution) {
+              resolvedHeaders[entry.name] = secretResolution.value;
+              manifest.push(secretResolution.manifestEntry);
+              secretKeys.add(entry.ref.configPath);
+            }
+            continue;
+          }
+          const secretResolution = await resolveSecretValueInternal(
+            companyId,
+            entry.ref.secretId,
+            entry.ref.version,
+            context
+              ? ownerScoped
+                ? {
+                    accessContext: { ...context, configPath: entry.ref.configPath },
+                  }
+                : {
+                    bindingContext: { ...context, configPath: entry.ref.configPath },
+                    accessContext: { ...context, configPath: entry.ref.configPath },
+                  }
+              : undefined,
+          );
+          resolvedHeaders[entry.name] = secretResolution.value;
+          manifest.push(secretResolution.manifestEntry);
+          secretKeys.add(entry.ref.configPath);
+        }
+        resolved.headers = resolvedHeaders;
       }
       return { config: resolved, secretKeys, manifest };
     },

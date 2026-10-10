@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { UserPlus2 } from "lucide-react";
 import { accessApi } from "@/api/access";
 import { ApiError } from "@/api/client";
+import { ActionErrorLine, actionErrorFromUnknown } from "@/components/ActionErrorLine";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -116,6 +117,14 @@ export function JoinRequestQueue() {
           </select>
         </label>
       </Card>
+
+      <ActionErrorLine
+        error={
+          approveMutation.error
+            ? actionErrorFromUnknown(approveMutation.error, "Failed to approve join request")
+            : null
+        }
+      />
 
       <div className="space-y-4">
         {(requestsQuery.data ?? []).length === 0 ? (

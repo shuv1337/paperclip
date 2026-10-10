@@ -1,7 +1,9 @@
 import type { AdapterExecutionContext, AdapterExecutionResult } from "../types.js";
-import { asString, asNumber, parseObject } from "../utils.js";
+import { asString, parseObject } from "../utils.js";
 import { beginAsyncHttpRun, discardAsyncHttpRun, type AsyncHttpRunCompletion } from "./async-run.js";
+import { requireHttpRequestHeaders } from "./headers.js";
 import { guardedHttpAdapterFetch } from "./remote-fetch.js";
+import { resolveHttpTimeoutMs } from "./timeout.js";
 
 type HttpResponseMode = "sync" | "async" | "auto";
 
@@ -9,13 +11,6 @@ function readResponseMode(config: Record<string, unknown>): HttpResponseMode {
   const raw = asString(config.responseMode, "auto").trim().toLowerCase();
   if (raw === "sync" || raw === "async") return raw;
   return "auto";
-}
-
-function resolveTimeoutMs(config: Record<string, unknown>): number {
-  const timeoutMs = asNumber(config.timeoutMs, 0);
-  if (timeoutMs > 0) return timeoutMs;
-  const timeoutSec = asNumber(config.timeoutSec, 0);
-  return timeoutSec > 0 ? Math.round(timeoutSec * 1000) : 0;
 }
 
 export function httpRunCompleteUrl(runId: string, config: Record<string, unknown>): string {
@@ -71,10 +66,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const url = asString(config.url, "");
   if (!url) throw new Error("HTTP adapter missing url");
 
-  const method = asString(config.method, "POST");
-  const timeoutMs = resolveTimeoutMs(config);
+  const method = asString(config.method, "POST").trim().toUpperCase() || "POST";
+  const timeoutMs = resolveHttpTimeoutMs(config);
   const responseMode = readResponseMode(config);
-  const headers = parseObject(config.headers) as Record<string, string>;
+  const headers = requireHttpRequestHeaders(config.headers);
   const payloadTemplate = parseObject(config.payloadTemplate);
   const mayDefer = responseMode !== "sync";
   const session = mayDefer
