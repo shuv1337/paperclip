@@ -1,15 +1,17 @@
 import type { AdapterExecutionContext, AdapterExecutionResult } from "../types.js";
-import { asString, asNumber, parseObject } from "../utils.js";
+import { asString, parseObject } from "../utils.js";
+import { requireHttpRequestHeaders } from "./headers.js";
 import { guardedHttpAdapterFetch } from "./remote-fetch.js";
+import { resolveHttpTimeoutMs } from "./timeout.js";
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { config, runId, agent, context } = ctx;
   const url = asString(config.url, "");
   if (!url) throw new Error("HTTP adapter missing url");
 
-  const method = asString(config.method, "POST");
-  const timeoutMs = asNumber(config.timeoutMs, 0);
-  const headers = parseObject(config.headers) as Record<string, string>;
+  const method = asString(config.method, "POST").trim().toUpperCase() || "POST";
+  const timeoutMs = resolveHttpTimeoutMs(config);
+  const headers = requireHttpRequestHeaders(config.headers);
   const payloadTemplate = parseObject(config.payloadTemplate);
   const body = {
     ...payloadTemplate,

@@ -80,6 +80,25 @@ describe("heartbeat stop metadata", () => {
     )).toMatchObject({ effectiveTimeoutSec: 45, timeoutConfigured: true, timeoutSource: "config", timeoutFired: false });
   });
 
+  it("prefers timeoutSec for http and keeps timeoutMs when seconds are omitted", () => {
+    expect(resolveHeartbeatRunTimeoutPolicy("http", { timeoutSec: 2.5 })).toMatchObject({
+      effectiveTimeoutSec: 2.5,
+      effectiveTimeoutMs: 2500,
+      timeoutConfigured: true,
+      timeoutSource: "config",
+    });
+    expect(resolveHeartbeatRunTimeoutPolicy("http", { timeoutSec: 0, timeoutMs: 2500 })).toMatchObject({
+      effectiveTimeoutMs: 0,
+      timeoutConfigured: false,
+      timeoutSource: "config",
+    });
+    expect(resolveHeartbeatRunTimeoutPolicy("http", { timeoutMs: 2500 })).toMatchObject({
+      effectiveTimeoutSec: 2.5,
+      effectiveTimeoutMs: 2500,
+      timeoutSource: "config",
+    });
+  });
+
   it("keeps the HTTP millisecond policy internally consistent", () => {
     expect(mergeHeartbeatRunStopMetadata(
       { adapterExecutionTimeout: { timeoutSec: 90, source: "configured" } },
