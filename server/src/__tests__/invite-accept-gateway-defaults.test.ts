@@ -146,6 +146,42 @@ describe("normalizeAgentDefaultsForJoin (openclaw_gateway)", () => {
   });
 });
 
+describe("normalizeAgentDefaultsForJoin (grok_bot)", () => {
+  it("requires a webhook URL and key, and defaults the run to async", () => {
+    const missing = normalizeAgentDefaultsForJoin({
+      adapterType: "grok_bot",
+      defaultsPayload: {},
+      deploymentMode: "authenticated",
+      deploymentExposure: "private",
+      bindHost: "127.0.0.1",
+      allowedHostnames: [],
+    });
+    expect(missing.fatalErrors).toEqual(expect.arrayContaining([
+      "agentDefaultsPayload.webhookUrl is required",
+      "agentDefaultsPayload.webhookKey is required",
+    ]));
+
+    const normalized = normalizeAgentDefaultsForJoin({
+      adapterType: "grok_bot",
+      defaultsPayload: {
+        url: "https://bot.example/hook",
+        webhookKey: "raw-webhook-secret",
+      },
+      deploymentMode: "authenticated",
+      deploymentExposure: "private",
+      bindHost: "127.0.0.1",
+      allowedHostnames: [],
+    });
+    expect(normalized.fatalErrors).toEqual([]);
+    expect(normalized.normalized).toMatchObject({
+      webhookUrl: "https://bot.example/hook",
+      webhookKey: "raw-webhook-secret",
+      responseMode: "async",
+    });
+    expect(normalized.normalized).not.toHaveProperty("url");
+  });
+});
+
 describe("normalizeAgentDefaultsForJoin (hermes_gateway)", () => {
   it("rejects remote plain HTTP by default", () => {
     const normalized = normalizeAgentDefaultsForJoin({

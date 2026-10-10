@@ -37,11 +37,13 @@ function readTrimmedString(value: unknown): string | null {
 
 /**
  * Infer an adapter type from a join-request payload.
- * A websocket url infers openclaw_gateway. Any other url infers http.
- * apiBaseUrl infers hermes_gateway. Process is never inferred.
+ * webhookUrl infers grok_bot. A websocket url infers openclaw_gateway.
+ * Any other url infers http. apiBaseUrl infers hermes_gateway.
+ * Process is never inferred.
  */
 export function inferAdapterTypeFromAgentDefaultsPayload(payload: unknown): string | null {
   if (!isRecord(payload)) return null;
+  if (readTrimmedString(payload.webhookUrl)) return "grok_bot";
   const url = readTrimmedString(payload.url);
   if (url) {
     if (WEBSOCKET_URL.test(url)) return "openclaw_gateway";

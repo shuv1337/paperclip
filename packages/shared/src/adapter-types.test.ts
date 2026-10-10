@@ -77,7 +77,23 @@ describe("dynamic adapter type validation schemas", () => {
     }
   });
 
-  it("infers http from url, openclaw from a websocket url, and hermes from apiBaseUrl", () => {
+  it("infers grok_bot from webhookUrl, http from url, openclaw from a websocket url, and hermes from apiBaseUrl", () => {
+    expect(
+      resolveAgentJoinRequestAdapterType({
+        agentDefaultsPayload: {
+          webhookUrl: " https://bot.example/hook ",
+          webhookKey: "raw-key",
+        },
+      }),
+    ).toEqual({ ok: true, adapterType: "grok_bot", source: "inferred" });
+
+    expect(
+      resolveAgentJoinRequestAdapterType({
+        adapterType: "grok_bot",
+        agentDefaultsPayload: { webhookUrl: "https://bot.example/hook", webhookKey: "raw-key" },
+      }),
+    ).toEqual({ ok: true, adapterType: "grok_bot", source: "explicit" });
+
     expect(
       resolveAgentJoinRequestAdapterType({
         agentDefaultsPayload: { url: " https://agent.example/hook " },

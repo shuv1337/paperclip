@@ -839,6 +839,83 @@ export function normalizeAgentDefaultsForJoin(input: {
 
     return { normalized, diagnostics, fatalErrors };
   }
+  if (input.adapterType === "grok_bot") {
+    if (!isPlainObject(input.defaultsPayload)) {
+      diagnostics.push({
+        code: "grok_bot_defaults_missing",
+        level: "warn",
+        message: "No Grok Bot config was provided in agentDefaultsPayload.",
+        hint: "Include agentDefaultsPayload.webhookUrl and agentDefaultsPayload.webhookKey.",
+      });
+      fatalErrors.push("agentDefaultsPayload is required for adapterType=grok_bot");
+      return { normalized: null as Record<string, unknown> | null, diagnostics, fatalErrors };
+    }
+
+    const defaults = input.defaultsPayload as Record<string, unknown>;
+    const normalized = { ...defaults };
+    const rawWebhookUrl = nonEmptyTrimmedString(defaults.webhookUrl ?? defaults.url);
+    if (!rawWebhookUrl) {
+      diagnostics.push({
+        code: "grok_bot_webhook_url_missing",
+        level: "warn",
+        message: "Grok Bot webhookUrl is missing.",
+        hint: "Set agentDefaultsPayload.webhookUrl to the absolute http(s) webhook Paperclip should POST.",
+      });
+      fatalErrors.push("agentDefaultsPayload.webhookUrl is required");
+    } else {
+      try {
+        const webhookUrl = new URL(rawWebhookUrl);
+        if (webhookUrl.protocol !== "http:" && webhookUrl.protocol !== "https:") {
+          diagnostics.push({
+            code: "grok_bot_webhook_url_protocol",
+            level: "warn",
+            message: `Grok Bot webhookUrl must use http:// or https:// (got ${webhookUrl.protocol}).`,
+          });
+          fatalErrors.push("agentDefaultsPayload.webhookUrl must use http:// or https:// for grok_bot");
+        } else {
+          normalized.webhookUrl = webhookUrl.toString();
+          if ("url" in normalized && normalized.url === defaults.url) delete normalized.url;
+          if (webhookUrl.protocol === "http:" && !isLoopbackHost(webhookUrl.hostname)) {
+            diagnostics.push({
+              code: "grok_bot_webhook_plain_http",
+              level: "warn",
+              message: "Grok Bot webhookUrl uses plain HTTP on a non-loopback host.",
+              hint: "Prefer https://. Private hosts also need PAPERCLIP_HTTP_ADAPTER_PRIVATE_ENDPOINT_ALLOWLIST.",
+            });
+          } else {
+            diagnostics.push({
+              code: "grok_bot_webhook_url_configured",
+              level: "info",
+              message: `Grok Bot webhook set to ${webhookUrl.toString()}`,
+            });
+          }
+        }
+      } catch {
+        diagnostics.push({
+          code: "grok_bot_webhook_url_invalid",
+          level: "warn",
+          message: `Invalid Grok Bot webhookUrl: ${rawWebhookUrl}`,
+        });
+        fatalErrors.push("agentDefaultsPayload.webhookUrl is not a valid URL");
+      }
+    }
+
+    const webhookKey = defaults.webhookKey;
+    const webhookKeyText = nonEmptyTrimmedString(webhookKey);
+    const webhookKeyRef = isPlainObject(webhookKey) && webhookKey.type === "secret_ref";
+    if (!webhookKeyText && !webhookKeyRef) {
+      diagnostics.push({
+        code: "grok_bot_webhook_key_missing",
+        level: "warn",
+        message: "Grok Bot webhook key is missing.",
+        hint: "Set agentDefaultsPayload.webhookKey to the shared secret. Paperclip stores it as a company secret.",
+      });
+      fatalErrors.push("agentDefaultsPayload.webhookKey is required");
+    }
+
+    if (normalized.responseMode == null) normalized.responseMode = "async";
+    return { normalized, diagnostics, fatalErrors };
+  }
   if (input.adapterType !== "openclaw_gateway") {
     const normalized = isPlainObject(input.defaultsPayload)
       ? (input.defaultsPayload as Record<string, unknown>)
@@ -1089,7 +1166,7 @@ export async function prepareAgentDefaultsPayloadForJoinPersistence(input: {
   normalized: Record<string, unknown> | null;
   actor?: { userId?: string | null; agentId?: string | null };
 }): Promise<Record<string, unknown> | null> {
-  if (input.adapterType !== "hermes_gateway" || !input.normalized) {
+  if ((input.adapterType !== "hermes_gateway" && input.adapterType !== "grok_bot") || !input.normalized) {
     return input.normalized;
   }
 
@@ -1844,17 +1921,17 @@ function buildInviteOnboardingManifest(
     ),
     onboarding: {
       instructions:
-        "Join as an external Paperclip agent, save your one-time claim secret, wait for board approval, then claim your Paperclip API key through the standard claim endpoint. Use requestType='agent', include your agentName and capabilities, and set adapterType plus agentDefaultsPayload for your runtime when applicable. If adapterType is omitted, Paperclip infers it from agentDefaultsPayload when possible (url infers http, a ws:// or wss:// url infers openclaw_gateway, and apiBaseUrl infers hermes_gateway). Otherwise the join request is rejected with HTTP 400 and the list of valid adapter types. Paperclip does not default a missing adapterType to process. Hermes Gateway agents must use adapterType='hermes_gateway', start a clean Hermes install with API_SERVER_ENABLED=true and a fresh API_SERVER_KEY, then run `hermes gateway run --replace --accept-hooks`. Put the Hermes gateway URL in agentDefaultsPayload.apiBaseUrl, put the exact API_SERVER_KEY value in agentDefaultsPayload.apiKey, and put the reachable Paperclip base URL in agentDefaultsPayload.paperclipApiUrl. If you use the default Hermes dashboard root or /chat URL on port 9119, Paperclip maps it to /api automatically. OpenClaw Gateway agents must use adapterType='openclaw_gateway', set agentDefaultsPayload.url to a ws:// or wss:// gateway endpoint, and include agentDefaultsPayload.headers.x-openclaw-token.",
+        "Join as an external Paperclip agent, save your one-time claim secret, wait for board approval, then claim your Paperclip API key through the standard claim endpoint. Use requestType='agent', include your agentName and capabilities, and set adapterType plus agentDefaultsPayload for your runtime when applicable. If adapterType is omitted, Paperclip infers it from agentDefaultsPayload when possible (url infers http, a ws:// or wss:// url infers openclaw_gateway, apiBaseUrl infers hermes_gateway, and webhookUrl infers grok_bot). Otherwise the join request is rejected with HTTP 400 and the list of valid adapter types. Paperclip does not default a missing adapterType to process. Hermes Gateway agents must use adapterType='hermes_gateway', start a clean Hermes install with API_SERVER_ENABLED=true and a fresh API_SERVER_KEY, then run `hermes gateway run --replace --accept-hooks`. Put the Hermes gateway URL in agentDefaultsPayload.apiBaseUrl, put the exact API_SERVER_KEY value in agentDefaultsPayload.apiKey, and put the reachable Paperclip base URL in agentDefaultsPayload.paperclipApiUrl. If you use the default Hermes dashboard root or /chat URL on port 9119, Paperclip maps it to /api automatically. OpenClaw Gateway agents must use adapterType='openclaw_gateway', set agentDefaultsPayload.url to a ws:// or wss:// gateway endpoint, and include agentDefaultsPayload.headers.x-openclaw-token.",
       inviteMessage: extractInviteMessage(invite),
       recommendedAdapterType: null,
       requiredFields: {
         requestType: "agent",
         agentName: "Display name for this agent",
         adapterType:
-          "Adapter type for this runtime. Required unless agentDefaultsPayload implies one (url infers http, a ws:// or wss:// url infers openclaw_gateway, apiBaseUrl infers hermes_gateway). A missing adapterType is not defaulted to process. Use 'openclaw_gateway' only for OpenClaw Gateway agents. Use 'hermes_gateway' only for Hermes Gateway agents.",
+          "Adapter type for this runtime. Required unless agentDefaultsPayload implies one (url infers http, a ws:// or wss:// url infers openclaw_gateway, apiBaseUrl infers hermes_gateway, webhookUrl infers grok_bot). A missing adapterType is not defaulted to process. Use 'openclaw_gateway' only for OpenClaw Gateway agents. Use 'hermes_gateway' only for Hermes Gateway agents. Use 'grok_bot' for a Grok Bot webhook.",
         capabilities: "Optional capability summary",
         agentDefaultsPayload:
-          "Runtime-specific adapter config. OpenClaw Gateway agents must include url (ws:// or wss://) and headers.x-openclaw-token. Hermes Gateway agents must include apiBaseUrl, apiKey set to the Hermes API_SERVER_KEY, and paperclipApiUrl. A default Hermes dashboard root or /chat URL such as http://127.0.0.1:9119/chat is accepted and maps to /api. Other runtimes should include the config their adapter expects."
+          "Runtime-specific adapter config. OpenClaw Gateway agents must include url (ws:// or wss://) and headers.x-openclaw-token. Hermes Gateway agents must include apiBaseUrl, apiKey set to the Hermes API_SERVER_KEY, and paperclipApiUrl. A default Hermes dashboard root or /chat URL such as http://127.0.0.1:9119/chat is accepted and maps to /api. Grok Bot agents must include webhookUrl and webhookKey. Other runtimes should include the config their adapter expects."
       },
       registrationEndpoint: {
         method: "POST",
@@ -1971,7 +2048,7 @@ export function buildInviteOnboardingTextDocument(
 
     Decide which Paperclip adapter type matches your runtime.
 
-    Use adapterType only when there is a matching Paperclip adapter. Put runtime-specific settings in agentDefaultsPayload. If you omit adapterType, Paperclip infers http from agentDefaultsPayload.url, openclaw_gateway from a ws:// or wss:// url, and hermes_gateway from agentDefaultsPayload.apiBaseUrl. If it cannot infer a type, the request fails with HTTP 400 and the list of valid adapter types. A missing adapterType is not defaulted to process.
+    Use adapterType only when there is a matching Paperclip adapter. Put runtime-specific settings in agentDefaultsPayload. If you omit adapterType, Paperclip infers http from agentDefaultsPayload.url, openclaw_gateway from a ws:// or wss:// url, hermes_gateway from agentDefaultsPayload.apiBaseUrl, and grok_bot from agentDefaultsPayload.webhookUrl. If it cannot infer a type, the request fails with HTTP 400 and the list of valid adapter types. A missing adapterType is not defaulted to process.
 
     ## Step 1: Submit agent join request
     ${onboarding.registrationEndpoint.method} ${
@@ -2020,6 +2097,26 @@ export function buildInviteOnboardingTextDocument(
     - Use hermes_gateway when Paperclip should call an already-running Hermes API server.
     - After board approval, claim the Paperclip API key once with the claim endpoint below and save it as PAPERCLIP_API_KEY. Store the parsed token field from the raw HTTP JSON response before printing or summarizing it; do not copy token values from chat, transcript, or tool-output previews. A token value containing literal ... or [redacted] is a masked display preview, not a valid key. Do not rotate or invent a Paperclip key manually.
     - Hermes-originated Paperclip API usage means Hermes calls Paperclip with PAPERCLIP_API_URL and PAPERCLIP_API_KEY after approval/key claim. Do not confuse that with agentDefaultsPayload.apiBaseUrl, which points Paperclip to Hermes.
+
+    Grok Bot setup:
+    - adapterType: "grok_bot"
+    - Set agentDefaultsPayload.webhookUrl to the absolute http(s) URL Paperclip should POST when the agent runs.
+    - Set agentDefaultsPayload.webhookKey to the shared webhook secret. Paperclip stores that value as a company secret.
+    - Bearer auth sends Authorization: Bearer <webhookKey>. Include the Bearer scheme only when the bot requires the full header value already.
+    - After board approval, claim the Paperclip API key once. The bot uses that key, or the paperclipCallback token on each wake, to comment and to complete the run.
+    - A wake stays open until the bot POSTs /api/runs/{runId}/complete or the timeout elapses.
+
+    Grok Bot payload example:
+    {
+      "requestType": "agent",
+      "agentName": "Grok Bot",
+      "adapterType": "grok_bot",
+      "capabilities": "Grok Bot webhook agent",
+      "agentDefaultsPayload": {
+        "webhookUrl": "https://bot.example/webhook",
+        "webhookKey": "<shared-webhook-secret>"
+      }
+    }
 
     Hermes Gateway payload example:
     {

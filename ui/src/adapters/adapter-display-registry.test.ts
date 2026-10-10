@@ -15,6 +15,8 @@ describe("adapter display registry", () => {
     expect(getAdapterLabel("hermes_gateway")).toBe("Hermes Gateway");
     expect(getAdapterLabel("opencode_local")).toBe("OpenCode");
     expect(getAdapterLabel("pi_local")).toBe("Pi");
+    expect(getAdapterLabel("grok_bot")).toBe("Grok Bot");
+    expect(getAdapterDisplay("grok_bot").comingSoon).toBeUndefined();
 
     expect(getAdapterLabels()).toMatchObject({
       codex_local: "Codex",

@@ -7,6 +7,17 @@ import { resolveHttpTimeoutMs } from "./timeout.js";
 
 type HttpResponseMode = "sync" | "async" | "auto";
 
+export type HttpExecuteOptions = {
+  /**
+   * Adjust headers after the JSON body is finalized.
+   * Grok Bot uses this to add a bearer header or an HMAC of the exact body.
+   */
+  finalizeHeaders?: (
+    bodyText: string,
+    headers: Record<string, string>,
+  ) => Record<string, string>;
+};
+
 function readResponseMode(config: Record<string, unknown>): HttpResponseMode {
   const raw = asString(config.responseMode, "auto").trim().toLowerCase();
   if (raw === "sync" || raw === "async") return raw;
@@ -61,7 +72,10 @@ function waitForAsyncCompletion(
   });
 }
 
-export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
+export async function execute(
+  ctx: AdapterExecutionContext,
+  options?: HttpExecuteOptions,
+): Promise<AdapterExecutionResult> {
   const { config, runId, agent, context } = ctx;
   const url = asString(config.url, "");
   if (!url) throw new Error("HTTP adapter missing url");
@@ -133,13 +147,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     // before starting the remote request so dispatch gates can release without
     // waiting for the endpoint to respond.
     ctx.onDispatch?.();
+    const bodyText = JSON.stringify(body);
+    const requestHeaders = options?.finalizeHeaders
+      ? options.finalizeHeaders(bodyText, {
+          "content-type": "application/json",
+          ...headers,
+        })
+      : {
+          "content-type": "application/json",
+          ...headers,
+        };
     const res = await guardedHttpAdapterFetch(url, {
       method,
-      headers: {
-        "content-type": "application/json",
-        ...headers,
-      },
-      body: JSON.stringify(body),
+      headers: requestHeaders,
+      body: bodyText,
       ...(timer || ctx.signal ? { signal: controller.signal } : {}),
     });
 

@@ -1812,6 +1812,13 @@ When the run may stay open, the webhook JSON includes `paperclipCallback`:
 
 The origin comes from `adapterConfig.callbackBaseUrl` or `PAPERCLIP_API_URL`.
 
+## Grok Bot Adapter
+
+`grok_bot` is the async HTTP adapter with Grok Bot defaults. See
+[doc/adapters/grok-bot.md](adapters/grok-bot.md) for the join flow: invite link,
+`adapterType: "grok_bot"` with `webhookUrl` and `webhookKey`, then the
+completion callback. `responseMode` defaults to `async`.
+
 Complete the run with:
 
 ```http

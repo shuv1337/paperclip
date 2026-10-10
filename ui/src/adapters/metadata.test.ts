@@ -38,6 +38,9 @@ describe("adapter metadata", () => {
     expect(isEnabledAdapterType("http")).toBe(true);
     expect(isValidAdapterType("http")).toBe(true);
     expect(isVisualAdapterChoice("http")).toBe(true);
+    expect(isEnabledAdapterType("grok_bot")).toBe(true);
+    expect(isValidAdapterType("grok_bot")).toBe(true);
+    expect(isVisualAdapterChoice("grok_bot")).toBe(true);
 
     expect(
       listAdapterOptions((type) => type, [

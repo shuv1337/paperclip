@@ -30,6 +30,7 @@ When a heartbeat fires, Paperclip:
 | OpenClaw Gateway | `openclaw_gateway` | Connects to an OpenClaw gateway endpoint |
 | [Process](/adapters/process) | `process` | Executes arbitrary shell commands |
 | [HTTP](/adapters/http) | `http` | Sends webhooks to external agents |
+| Grok Bot | `grok_bot` | Wakes a Grok Bot webhook and waits for its callback |
 
 ## Credential ownership for sandbox targets
 
